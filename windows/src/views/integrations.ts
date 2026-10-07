@@ -404,6 +404,36 @@ export function hasIntegrationData(id: string): boolean {
 }
 
 export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHooks): HTMLElement {
+  if (task.id === "integration_amiguito") {
+    const isLive = State.voiceStatus === "Live" || State.voiceStatus === "Te estoy escuchando..." || State.voiceStatus === "Esperando tu voz..." || State.voiceStatus === "Gemini está pensando..." || State.voiceStatus === "Gemini está hablando...";
+    const isSpeaking = State.voiceStatus === "Gemini está hablando...";
+    const isListening = State.voiceStatus === "Te estoy escuchando..." || State.voiceStatus === "Esperando tu voz..." || State.voiceStatus === "Live";
+    
+    let avatarAnim = "";
+    if (isSpeaking) {
+      avatarAnim = "pulse 0.5s infinite alternate";
+    } else if (isListening) {
+      avatarAnim = "pulse 1.5s infinite";
+    }
+    
+    const avatar = h("div", { 
+      style: `width: 48px; height: 48px; border-radius: 50%; background: var(--wash); display: flex; align-items: center; justify-content: center; font-size: 24px; animation: ${avatarAnim}; transition: all 0.3s ease; box-shadow: 0 0 10px var(--wash);`
+    }, h("span", { text: isSpeaking ? "🗣️" : isListening ? "👂" : "🤖" }));
+
+    return h(
+      "div",
+      { class: "int-card", style: "display: flex; flex-direction: column; align-items: center; padding: 20px;" },
+      avatar,
+      h("div", { style: "font-weight: 600; font-size: 16px; margin-top: 12px;" }, "Caf (Amiguito)"),
+      h("div", { class: "int-status", style: "margin-top: 8px;" }, 
+        dot(isLive ? "#22C55E" : "#6B7280", 5), 
+        h("span", { text: State.voiceStatus })
+      ),
+      h("div", { style: "color: var(--dim-4); font-size: 12px; margin-top: 12px; text-align: center;" }, 
+        "Di 'CAF' para iniciar."
+      )
+    );
+  }
   if (task.id === "integration_n8n") {
     const hasActivity = task.steps.length > 0 && (task.state === "finished" || task.state === "error");
     return hooks.detailOpen && hasActivity

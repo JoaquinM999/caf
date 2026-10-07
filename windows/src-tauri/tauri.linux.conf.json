@@ -38,7 +38,7 @@
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "focus": false,
         "focusable": false,
@@ -46,7 +46,7 @@
         "visible": false,
         "center": false,
         "maximizable": false,
-        "minimizable": false,
+        "minimizable": true,
         "closable": false,
         "dragDropEnabled": true,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"

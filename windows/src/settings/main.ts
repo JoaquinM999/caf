@@ -171,13 +171,7 @@ function claudeSection(status: HookStatus): HTMLElement {
   return section;
 }
 
-// ── Claude API section ────────────────────────────────────────────────────────
-
-const MODELS: [string, string][] = [
-  ["claude-opus-5", "Claude Opus 5"],
-  ["claude-sonnet-5", "Claude Sonnet 5"],
-  ["claude-haiku-4-5", "Claude Haiku 4.5"],
-];
+// ── Gemini API section ────────────────────────────────────────────────────────
 
 function apiSection(hasKey: boolean): HTMLElement {
   const dot = statusDot(hasKey);
@@ -185,7 +179,7 @@ function apiSection(hasKey: boolean): HTMLElement {
 
   const field = h("input", {
     type: "password",
-    placeholder: hasKey ? "••••••••••••  (stored)" : "sk-ant-...",
+    placeholder: hasKey ? "••••••••••••  (stored)" : "AIza...",
     style: "flex:1 1 auto;min-width:0",
     autocomplete: "off",
     spellcheck: "false",
@@ -231,22 +225,40 @@ function apiSection(hasKey: boolean): HTMLElement {
   });
 
   const model = h("select", {}) as HTMLSelectElement;
-  for (const [id, label] of MODELS) model.append(h("option", { value: id, text: label }));
-  if (!MODELS.some(([id]) => id === settings.model)) {
-    model.append(h("option", { value: settings.model, text: settings.model }));
-  }
-  model.value = settings.model;
   model.addEventListener("change", () => {
     settings.model = model.value;
     void save();
   });
+
+  async function refreshModels() {
+    clear(model);
+    if (!hasKey) {
+      model.append(h("option", { text: "Save an API key to load models" }));
+      model.disabled = true;
+      return;
+    }
+    try {
+      const models = await Bridge.listGeminiModels();
+      for (const item of models) model.append(h("option", { value: item.id, text: item.displayName }));
+      if (!models.some((item) => item.id === settings.model)) {
+        settings.model = models[0]?.id ?? "gemini-flash-latest";
+        await save();
+      }
+      model.value = settings.model;
+      model.disabled = models.length === 0;
+    } catch (err) {
+      model.append(h("option", { text: `Could not load models: ${String(err)}` }));
+      model.disabled = true;
+    }
+  }
+  void refreshModels();
 
   clearBtn.style.display = hasKey ? "" : "none";
 
   return h(
     "section",
     {},
-    h("h2", {}, dot, h("span", { text: "Claude" })),
+    h("h2", {}, dot, h("span", { text: "Gemini" })),
     state,
     h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
     h("div", { class: "row" }, h("label", { text: "Model" }), model),
@@ -265,6 +277,7 @@ interface IntegrationDef {
 }
 
 const INTEGRATIONS: IntegrationDef[] = [
+  { id: "integration_amiguito", name: "Caf", color: "#A855F7", fields: [] },
   { id: "integration_stripe", name: "Stripe", color: "#0570DE",
     fields: [{ key: "stripe-api-key", label: "Secret key", placeholder: "sk_live_…", secret: true }] },
   { id: "integration_github", name: "GitHub", color: "#F4505E",

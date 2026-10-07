@@ -15,6 +15,8 @@ import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations
 export interface ViewActions {
   setView(v: IslandViewName): void;
   collapse(): void;
+  minimize(): void;
+  closeApp(): void;
   setFocus(id: string): void;
   openTerminal(): void;
   /** The ↗ button: opens whatever the focused pill points at. */
@@ -82,6 +84,8 @@ export function buildHeader(actions: ViewActions): ViewHost {
   const tabChat = h("button", { class: "tab", title: "Ask", onclick: () => go("prompt") }, svg(ICONS.bubble, 13));
   const tabDrop = h("button", { class: "tab", title: "Drop", onclick: () => go("upload") }, svg(ICONS.plus, 13));
 
+  const minimizeBtn = h("button", { title: "Minimize", onclick: () => actions.minimize() }, svg(ICONS.minus, 14));
+  const closeBtn = h("button", { title: "Close panel", onclick: () => actions.closeApp() }, svg(ICONS.xmark, 14));
   const gearBtn = h("button", { title: "Settings", onclick: () => go("settings") }, svg(ICONS.gear, 14));
   const soundBtn = h("button", { title: "Mute", onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
 
@@ -94,7 +98,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    h("div", { class: "header-actions" }, gearBtn, soundBtn),
+    h("div", { class: "header-actions" }, minimizeBtn, gearBtn, soundBtn, closeBtn),
   );
 
   return {
@@ -188,7 +192,7 @@ function buildOverview(actions: ViewActions): ViewHost {
         who.append(
           dot(task.color, 7),
           h("span", { class: "name", text: task.name }),
-          h("span", { class: "tool", text: task.source === "claudeCode" ? "Claude Code" : "n8n" }),
+          h("span", { class: "tool", text: task.id === "integration_amiguito" ? "PC Control" : task.source === "claudeCode" ? "Claude Code" : "n8n" }),
         );
         if (task.steps.length > 1) {
           who.append(h("span", {

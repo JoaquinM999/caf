@@ -53,6 +53,10 @@ async function main() {
 
   await onEvent<null>("screen-changed", () => void Bridge.reposition());
 
+  await onEvent<null>("global-shortcut", () => {
+    island.fsm.forceHome();
+  });
+
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {
     State.settings = { ...State.settings, ...s };

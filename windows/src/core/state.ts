@@ -59,6 +59,7 @@ const task = (
 /** AgentTask.integrationAgents — same ids, names and colours as macOS. */
 export const INTEGRATION_AGENTS: AgentTask[] = [
   task("integration_claude", "VS Code", "#F5F6F8", "claudeCode"),
+  task("integration_amiguito", "Caf", "#A855F7", "n8n"),
   task("integration_resend", "Resend", "#22C55E", "n8n"),
   task("integration_n8n", "n8n", "#F29B38", "n8n"),
   task("integration_vercel", "Vercel", "#7C5CFF", "n8n"),
@@ -69,7 +70,7 @@ export const INTEGRATION_AGENTS: AgentTask[] = [
 ];
 
 export const TOGGLEABLE_INTEGRATION_IDS = [
-  "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
+  "integration_amiguito", "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
   "integration_notion", "integration_calcom", "integration_stripe",
 ];
 
@@ -100,7 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCloseInterval: 15,
   absenceInterval: 180,
   activeIntegrations: [
-    "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
+    "integration_amiguito", "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
   ],
   screen: "primary",
   autostart: false,
@@ -141,6 +142,7 @@ class AppState {
   integrations: Record<string, IntegrationInfo> = {};
 
   lastActivity = performance.now();
+  voiceStatus: string = "Inactivo";
 
   settings: Settings = { ...DEFAULT_SETTINGS };
 

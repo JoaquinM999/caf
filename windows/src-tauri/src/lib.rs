@@ -11,14 +11,18 @@ mod platform;
 mod secrets;
 mod settings;
 mod tray;
+mod live;
 
-use std::process::Command;
+
+use std::process::{Command, Stdio};
+use std::io::{BufRead, Write};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use claude::{Chat, ChatContext, ChatReply};
 use files::DroppedFile;
@@ -31,6 +35,8 @@ pub struct Shared {
     pub settings: Mutex<Settings>,
     pub gate: Arc<PollGate>,
 }
+
+static CAF_STDIN: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +120,15 @@ fn focus_window(app: AppHandle, focused: bool) {
     platform::set_activating(&win, focused);
     if focused {
         let _ = win.set_focus();
+    }
+}
+
+#[tauri::command]
+fn set_window_priority(app: AppHandle, on_top: bool) {
+    let Some(win) = island::window(&app) else { return };
+    let _ = win.set_always_on_top(on_top);
+    if !on_top {
+        platform::send_to_back(&win);
     }
 }
 
@@ -238,20 +253,42 @@ fn approval_decline(app: AppHandle, request_id: String) {
 /// One chat turn. The API key and any file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
-    shared: State<'_, Shared>,
     chat: State<'_, Chat>,
     query: String,
+    persona: Option<String>,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    let model = shared.settings.lock().unwrap().model.clone();
-    claude::send(&chat, &model, query, context).await
+    claude::send(&chat, query, persona, context).await
+}
+
+#[tauri::command]
+async fn list_gemini_models() -> Result<Vec<claude::GeminiModel>, String> {
+    claude::list_models().await
+}
+
+#[tauri::command]
+fn speak(text: String) {
+    if let Ok(mut lock) = CAF_STDIN.lock() {
+        if let Some(stdin) = lock.as_mut() {
+            let _ = writeln!(stdin, "VOICE_OUT:{}", text.replace("\n", " "));
+        }
+    }
+}
+
+
+#[tauri::command]
+fn wake_voice() {
+    if let Ok(mut lock) = CAF_STDIN.lock() {
+        if let Some(stdin) = lock.as_mut() {
+            let _ = writeln!(stdin, "WAKE_UP");
+        }
+    }
 }
 
 #[tauri::command]
 fn chat_reset(chat: State<Chat>) {
     chat.reset();
 }
-
 /// Copies a dropped file into the inbox and reports its name back.
 #[tauri::command]
 fn ingest_file(path: String) -> Result<DroppedFile, String> {
@@ -370,6 +407,20 @@ pub fn run() {
             let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open".to_string());
         }))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(win) = island::window(app) {
+                            let _ = win.unminimize();
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                        let _ = app.emit_to(island::WINDOW_LABEL, "global-shortcut", ());
+                    }
+                })
+                .build(),
+        )
         .manage(Shared {
             settings: Mutex::new(loaded.clone()),
             gate: gate.clone(),
@@ -382,6 +433,7 @@ pub fn run() {
             set_collapsed,
             set_island_rect,
             focus_window,
+            set_window_priority,
             reposition,
             open_url,
             open_in_vscode,
@@ -394,6 +446,7 @@ pub fn run() {
             approval_decline,
             log_line,
             chat_send,
+            list_gemini_models,
             chat_reset,
             ingest_file,
             secret_present,
@@ -403,9 +456,68 @@ pub fn run() {
             open_n8n,
             open_settings_window,
             set_paused,
+            speak,
+            wake_voice,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            app.global_shortcut().register("CTRL+SHIFT+C")?;
+            
+            // Lanzar el script de Python de fondo y conectar STDIN/STDOUT
+            let mut caf_cmd = Command::new("python");
+            caf_cmd.arg("c:\\Users\\Joako\\OneDrive\\Escritorio\\Coucou\\Caf\\caf.py")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped());
+            
+            // Ocultar la consola de Python en Windows
+            platform::no_console(&mut caf_cmd);
+
+            if let Ok(mut child) = caf_cmd.spawn() {
+                if let Some(stdin) = child.stdin.take() {
+                    if let Ok(mut lock) = CAF_STDIN.lock() {
+                        *lock = Some(stdin);
+                    }
+                }
+                if let Some(stdout) = child.stdout.take() {
+                    let app_handle = handle.clone();
+                    std::thread::spawn(move || {
+                        let reader = std::io::BufReader::new(stdout);
+                        for line in reader.lines().map_while(Result::ok) {
+                            if let Some(text) = line.strip_prefix("VOICE_IN:") {
+                                let _ = app_handle.emit_to(island::WINDOW_LABEL, "voice-input", text);
+                            } else if let Some(audio_path) = line.strip_prefix("VOICE_AUDIO_IN:") {
+                                let app_handle_clone = app_handle.clone();
+                                let path = audio_path.to_string();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Ok(text) = claude::transcribe_audio(&path).await {
+                                        let _ = app_handle_clone.emit_to(island::WINDOW_LABEL, "voice-input", text);
+                                    } else {
+                                        let _ = app_handle_clone.emit_to(island::WINDOW_LABEL, "voice-status", "Error");
+                                    }
+                                });
+                            } else if let Some(status) = line.strip_prefix("VOICE_STATUS:") {
+                                let _ = app_handle.emit_to(island::WINDOW_LABEL, "voice-status", status);
+                            } else if line == "START_LIVE_CALL" {
+                                let app_handle_clone = app_handle.clone();
+                                let _ = app_handle_clone.emit_to(island::WINDOW_LABEL, "voice-status", "Live");
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = crate::live::start_live_session(app_handle_clone.clone()).await {
+                                        eprintln!("Live API error: {}", e);
+                                    }
+                                    // Cuando termina la llamada, soltamos y le decimos a Python que reanude
+                                    if let Ok(mut lock) = CAF_STDIN.lock() {
+                                        if let Some(stdin) = lock.as_mut() {
+                                            let _ = stdin.write_all(b"RESUME_VOSK\n");
+                                        }
+                                    }
+                                    let _ = app_handle_clone.emit_to(island::WINDOW_LABEL, "voice-status", "Inactivo");
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
             create_settings_window(&handle);

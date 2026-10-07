@@ -48,12 +48,17 @@ export const Bridge = {
   /** Give the window keyboard focus (chat field) and take it away again. */
   focusWindow: (focused: boolean) => call<void>("focus_window", { focused }),
 
+  /** Changes TOPMOST and, when closing, explicitly lowers the native window. */
+  setWindowPriority: (onTop: boolean) => call<void>("set_window_priority", { onTop }),
+
   reposition: () => call<void>("reposition"),
 
   openUrl: (url: string) => call<void>("open_url", { url }),
 
-  /** "Open terminal" → opens the folder in VS Code when `code` is on PATH. */
   openInVSCode: (path: string | null) => call<boolean>("open_in_vscode", { path }),
+  
+  speak: (text: string) => call<void>("speak", { text }),
+  wakeVoice: () => call<void>("wake_voice"),
 
   quit: () => call<void>("quit_app"),
 
@@ -82,8 +87,9 @@ export const Bridge = {
 
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
-  chatSend: (query: string, context: ChatContext | null) =>
-    callOrThrow<{ text: string }>("chat_send", { query, context }),
+  chatSend: (query: string, context: ChatContext | null, persona?: string) =>
+    callOrThrow<{ text: string }>("chat_send", { query, context, persona }),
+  listGeminiModels: () => callOrThrow<GeminiModel[]>("list_gemini_models"),
   chatReset: () => call<void>("chat_reset"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
@@ -111,6 +117,11 @@ export interface IntegrationUpdate {
 export type ChatContext =
   | { kind: "file"; name: string; path: string }
   | { kind: "window"; appName: string; title: string; url?: string };
+
+export interface GeminiModel {
+  id: string;
+  displayName: string;
+}
 
 export interface DroppedFile {
   name: string;

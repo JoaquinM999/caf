@@ -7,6 +7,7 @@ import { Bridge, type ChatContext } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
+import { listen } from "@tauri-apps/api/event";
 
 let nextId = 1;
 
@@ -45,15 +46,16 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     placeholder: "Ask me anything…",
     spellcheck: "false",
   }) as HTMLInputElement;
+
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
-  const bar = h("div", { class: "chat-bar" }, input, send);
+  const voice = h("button", { class: "send-btn", title: "Voice dictation", style: "margin-right: 4px;" }, svg(ICONS.mic, 12));
+  const bar = h("div", { class: "chat-bar" }, input, voice, send);
 
   const el = h(
     "div",
     { class: "view" },
     h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, bar)),
   );
-  (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(99,102,241,0.5)");
 
   let sending = false;
   let renderedCount = -1;
@@ -74,11 +76,18 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     const context: ChatContext | null =
       State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
 
+    const isAmiguito = State.focusTask?.id === "integration_amiguito";
+    const persona = isAmiguito ? "amiguito" : "coucou";
+
     try {
-      const reply = await Bridge.chatSend(query, context);
+      const reply = await Bridge.chatSend(query, context, persona);
       State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
       State.stateOverride = null;
       Sound.play("finish");
+      
+      if (persona === "amiguito") {
+          Bridge.speak(reply.text);
+      }
     } catch (err) {
       State.stateOverride = null;
       State.noteMessage = String(err).replace(/^Error:\s*/, "");
@@ -93,6 +102,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   }
 
   send.addEventListener("click", () => void submit());
+  voice.addEventListener("click", () => { Bridge.wakeVoice(); });
   input.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") {
       e.preventDefault();
@@ -101,9 +111,70 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     e.stopPropagation(); // Escape closes the island, not the chat
   });
 
+  // Escuchar a Python mediante Tauri events
+  listen<string>("voice-input", (event) => {
+      // Activar Amiguito si está disponible
+      const amiguito = State.tasks.find(t => t.id === "integration_amiguito");
+      if (amiguito) {
+          State.setFocus(amiguito.id);
+      }
+      input.value = event.payload;
+      void submit();
+  });
+
+  listen<string>("gemini-reply", (event) => {
+      State.chatHistory.push({ id: nextId++, role: "assistant", content: event.payload });
+      State.notify();
+      onHeightChange();
+  });
+
+  listen<string>("voice-status", (event) => {
+      const st = event.payload;
+      State.voiceStatus = st;
+      State.notify();
+      
+      // Auto-focus Amiguito if a live call starts
+      if (st === "Live" || st === "Te estoy escuchando..." || st === "Gemini está pensando..." || st === "Gemini está hablando..." || st === "Esperando tu voz...") {
+          const amiguito = State.tasks.find(t => t.id === "integration_amiguito");
+          if (amiguito && State.focusTask?.id !== amiguito.id) {
+              State.setFocus(amiguito.id);
+          }
+      }
+
+      if (st === "Escuchando" || st === "Te estoy escuchando..." || st === "Esperando tu voz..." || st === "Live") {
+          input.placeholder = "🎙️ " + (st === "Live" ? "Conectando..." : st);
+          voice.style.background = "rgba(239, 68, 68, 0.2)"; // rojito
+          voice.style.animation = "pulse 1.5s infinite";
+      } else if (st === "Procesando" || st === "Gemini está pensando...") {
+          input.placeholder = "⏳ " + st;
+          voice.style.background = "rgba(245, 158, 11, 0.2)"; // naranjita
+          voice.style.animation = "pulse 1s infinite";
+      } else if (st === "Ajustando") {
+          input.placeholder = "Ajustando ruido...";
+          voice.style.background = "rgba(107, 114, 128, 0.2)"; // gris
+          voice.style.animation = "";
+      } else if (st === "Gemini está hablando...") {
+          input.placeholder = "🔊 " + st;
+          voice.style.background = "rgba(168, 85, 247, 0.3)"; // violetita
+          voice.style.animation = "pulse 0.5s infinite alternate";
+      } else {
+          // inactivo, hablando, error
+          input.placeholder = "Ask me anything…";
+          voice.style.background = "";
+          voice.style.animation = "";
+      }
+  });
+
   return {
     el,
     sync() {
+      const isAmiguito = State.focusTask?.id === "integration_amiguito";
+      if (isAmiguito) {
+        (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(168, 85, 247, 0.5)"); // violeta
+      } else {
+        (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(99, 102, 241, 0.5)"); // original azul
+      }
+
       const file = State.droppedFile;
       const wantChip = file?.name ?? "";
       if (chipRow.dataset.label !== wantChip) {
@@ -122,7 +193,13 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         log.scrollTop = log.scrollHeight;
       }
 
-      input.placeholder = State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
+      if (!voice.style.background) {
+        if (isAmiguito) {
+          input.placeholder = State.chatHistory.length === 0 ? "Control the PC..." : "Continue controlling...";
+        } else {
+          input.placeholder = State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
+        }
+      }
       input.disabled = sending;
     },
     focus() {

@@ -16,7 +16,8 @@ use ::windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use ::windows::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW,
-    GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    SetWindowPos, GWL_EXSTYLE, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
 use super::LocalTime;
@@ -228,6 +229,22 @@ pub fn set_activating(win: &WebviewWindow, activating: bool) {
             ex | WS_EX_NOACTIVATE.0 as isize
         };
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+    }
+}
+
+/// Removes the island from the foreground Z-order after it stops being topmost.
+pub fn send_to_back(win: &WebviewWindow) {
+    let Some(hwnd) = hwnd_of(win) else { return };
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_BOTTOM),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 }
 

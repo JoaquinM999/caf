@@ -61,7 +61,14 @@ fn settings_path() -> PathBuf {
 }
 
 pub fn load() -> Settings {
-    load_from(&settings_path())
+    let mut settings = load_from(&settings_path());
+    if settings.model.starts_with("gemini-3.1")
+        || settings.model == "gemini-3.5-flash-lite"
+        || settings.model == "gemini-3.8-flash"
+    {
+        settings.model = crate::claude::DEFAULT_MODEL.to_string();
+    }
+    settings
 }
 
 pub fn save(settings: &Settings) -> std::io::Result<()> {

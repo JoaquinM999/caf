@@ -1,0 +1,8 @@
+keyboard
+SpeechRecognition
+PyAudio
+google-genai
+python-dotenv
+edge-tts
+pygame
+vosk

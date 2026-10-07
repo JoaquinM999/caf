@@ -107,6 +107,8 @@ export class Island {
     const actions: ViewActions = {
       setView: (v) => this.setView(v),
       collapse: () => this.collapse(),
+      minimize: () => this.minimize(),
+      closeApp: () => this.closeApp(),
       setFocus: (id) => {
         State.setFocus(id);
         Sound.play("blip");
@@ -119,6 +121,10 @@ export class Island {
       openTarget: () => {
         const task = State.focusTask;
         if (!task) return;
+        if (task.id === "integration_claude" || task.id === "integration_amiguito") {
+          this.setView("prompt");
+          return;
+        }
         const urls: Record<string, string> = {
           integration_resend: "https://resend.com/emails",
           integration_vercel: "https://vercel.com/dashboard",
@@ -260,6 +266,7 @@ export class Island {
     const prev = State.mode;
     if (mode === prev) return;
     State.mode = mode;
+    if (IS_TAURI) void Bridge.setWindowPriority(mode === "expanded");
     if (mode === "expanded") Sound.play("open");
     if (prev === "expanded") {
       Sound.play("close");
@@ -321,6 +328,18 @@ export class Island {
     // back left it thinking the island was still open, and a click on the compact
     // island then did nothing — the island could never be reopened.
     this.fsm.forcePetit();
+  }
+
+  minimize() {
+    State.isPinned = false;
+    this.fsm.pinned = false;
+    this.fsm.forcePetit();
+  }
+
+  closeApp() {
+    State.isPinned = false;
+    this.fsm.pinned = false;
+    this.fsm.forceHidden();
   }
 
   /** Alert from the hook server: open on this view. Pinned alerts never auto-close. */
