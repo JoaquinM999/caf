@@ -1,0 +1,9 @@
+import os
+from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+for model in client.models.list():
+    if "bidiGenerateContent" in str(model.supported_generation_methods):
+        print(model.name)

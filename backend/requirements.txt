@@ -1,0 +1,10 @@
+google-genai==0.3.0
+pyaudio
+fastapi
+uvicorn
+websockets
+python-dotenv
+pytest
+pytest-asyncio
+pydantic
+pyyaml
