@@ -283,8 +283,12 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
 
     try {
-      const reply = await Bridge.chatSend(query, context);
-      State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+      if ((State as any).cafClient) {
+        (State as any).cafClient.sendText(query);
+      } else {
+        const reply = await Bridge.chatSend(query, context);
+        State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+      }
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {

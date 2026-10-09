@@ -12,6 +12,7 @@ import { applySpotify, registerSpotifyHandlers } from "./island/spotify";
 import { SPOTIFY_ID } from "./core/spotify";
 import { Recap } from "./recap/recap";
 import { onLanguageChange, resolveLanguage, setLanguage, systemLanguages } from "./i18n/i18n";
+import { CafClient } from "./core/cafClient";
 
 /** Shows the language Settings asks for ("" = the system's, when Coucou has it). */
 function applyLanguage() {
@@ -111,6 +112,34 @@ async function main() {
   island.onGreetingDone = checkRecap;
   island.onWake = checkRecap;
   await onEvent<null>("recap-check", checkRecap);
+
+  const caf = new CafClient(
+    (state, extra) => {
+      console.log("CAF state:", state, extra);
+      if (state === "hablando") island.engine.setState("working");
+      else if (state === "pensando") island.engine.setState("thinking");
+      else if (state === "escuchando") {
+        // Maybe a small bounce to show it's listening
+        island.engine.setState("idle");
+        island.engine.triggerEmote("surprised", 0.5);
+      }
+      else if (state === "error") island.engine.setState("error");
+      else if (state === "ejecutando_herramienta") {
+        island.engine.setState("searching"); // Gives a cool scanning animation
+      }
+      else island.engine.setState("idle");
+      State.notify();
+    },
+    (role, text) => {
+      console.log(`CAF [${role}]: ${text}`);
+      if (text.trim() === "") return;
+      State.chatHistory.push({ id: Date.now(), role: role as "user" | "assistant", content: text });
+      State.notify();
+    }
+  );
+  caf.connect();
+  // Pass the client to State so chat.ts can use it to send text
+  (State as any).cafClient = caf;
 
   island.launch();
 

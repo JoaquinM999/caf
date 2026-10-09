@@ -71,7 +71,7 @@ export class Island {
   private botCy = new Spring(16);
   private botSize = new Spring(10);
 
-  private engine = new BotEngine();
+  engine = new BotEngine();
   private greeting = new Greeting();
   private greetingShown = false;
   private seasons = new SeasonCache();
