@@ -283,7 +283,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
 
     try {
-      if ((State as any).cafClient) {
+      if (State.settings.chatProvider === "caf" && (State as any).cafClient) {
         (State as any).cafClient.sendText(query);
       } else {
         const reply = await Bridge.chatSend(query, context);

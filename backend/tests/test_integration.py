@@ -1,8 +1,10 @@
 import asyncio
 import os
+import pytest
 from caf.engine import CafEngine
 from caf.tools import _safe_resolve
 
+@pytest.mark.asyncio
 async def test_integration():
     print("Iniciando Integration Test...")
     engine = CafEngine(profile_name="amiguito", use_audio_hardware=False)

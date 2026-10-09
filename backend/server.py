@@ -7,6 +7,7 @@ import base64
 from caf.engine import CafEngine
 from caf.profiles_manager import get_available_profiles
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("server")
 
 app = FastAPI(title="Caf V2 Backend")
@@ -44,6 +45,12 @@ async def websocket_endpoint(websocket: WebSocket):
     if not engine or not engine.is_running:
         engine = CafEngine(profile_name="amiguito", use_audio_hardware=True)
         engine_task = asyncio.create_task(engine.start())
+        def on_done(t):
+            if t.exception():
+                logger.error(f"ENGINE CRASHED: {t.exception()}")
+                import traceback
+                traceback.print_exception(type(t.exception()), t.exception(), t.exception().__traceback__)
+        engine_task.add_done_callback(on_done)
         
     async def receive_from_ws():
         try:

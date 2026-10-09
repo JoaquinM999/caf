@@ -21,10 +21,20 @@ class CafEngine:
     def __init__(self, profile_name="amiguito", use_audio_hardware=True):
         from dotenv import load_dotenv
         from pathlib import Path
+        import keyring
+        
         load_dotenv(Path(__file__).parent.parent / ".env")
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        
+        # Primero intentar desde el Credential Manager de Windows (Configurado en UI)
+        self.api_key = keyring.get_password("fr.louisraille.coucou", "caf-api-key")
+        
+        # Fallback al .env local
         if not self.api_key:
-            raise ValueError("GEMINI_API_KEY no encontrada en entorno")
+            self.api_key = os.getenv("GEMINI_API_KEY")
+            
+        if not self.api_key:
+            raise ValueError("API Key no encontrada. Por favor agregá la clave de Caf en la configuración de Coucou o en el archivo .env")
+            
         self.client = genai.Client(api_key=self.api_key, http_options={'api_version': 'v1alpha'})
         self.profile = load_profile(profile_name)
         
@@ -96,59 +106,76 @@ class CafEngine:
             
         logger.info(f"Tool resuelta: {res}")
         self.events_queue.put_nowait({"herramienta": {"nombre": function_call.name, "resultado": res}})
-        await session.send(input=types.LiveClientContent(
-            tool_response=types.LiveClientToolResponse(function_responses=[types.FunctionResponse(id=function_call.id, name=function_call.name, response={"result": res})])
+        await session.send(input=types.LiveClientToolResponse(
+            function_responses=[types.FunctionResponse(id=function_call.id, name=function_call.name, response={"result": res})]
         ))
 
     def _hardware_audio_in_loop(self):
-        p = pyaudio.PyAudio()
-        stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE_IN, input=True, frames_per_buffer=CHUNK)
+        p = getattr(self, "pa", None)
+        if not p: return
+        try:
+            default_in = p.get_default_input_device_info()
+            logger.info(f"🎤 [DEBUG] Usando micrófono: {default_in['name']} (índice {default_in['index']})")
+            stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE_IN, input=True, frames_per_buffer=CHUNK, input_device_index=default_in['index'])
+        except Exception as e:
+            logger.error(f"Error abriendo microfono PyAudio: {e}")
+            return
+            
+        import audioop
+        import time
+        last_log = time.time()
+            
         while self.is_running:
             try:
                 data = stream.read(CHUNK, exception_on_overflow=False)
+                
+                # Debug de volumen de entrada (1 vez por segundo si alguien habla)
+                rms = audioop.rms(data, 2)
+                if rms > 250 and time.time() - last_log > 1.0:
+                    logger.info(f"🎤 [DEBUG] Audio captado (volumen: {rms})")
+                    last_log = time.time()
+                    
                 self.audio_in_queue.put_nowait(data)
             except Exception as e:
                 logger.error(f"Hardware In Error: {e}")
                 break
         stream.stop_stream()
         stream.close()
-        p.terminate()
 
     def _hardware_audio_out_loop(self):
-        p = pyaudio.PyAudio()
-        stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE_OUT, output=True, frames_per_buffer=CHUNK)
-        # Using a blocking get in thread because pyaudio is blocking anyway
-        loop = asyncio.new_event_loop()
-        while self.is_running:
-            try:
-                # We need to run the async get in the thread's event loop to safely pull from the main loop's queue
-                # Actually, simpler: we'll use a thread-safe deque or just read the queue via run_coroutine_threadsafe.
-                # To avoid complexity, we'll implement it within the async loop as an executor.
-                pass
-            except Exception as e:
-                break
-                
+        pass # Reemplazado por consumer
+
     async def _audio_out_consumer(self, stream_out):
+        logger.info("🔊 [DEBUG] Iniciando hilo de reproducción de audio...")
         while self.is_running:
             data = await self.audio_out_queue.get()
             if data and stream_out:
-                await asyncio.to_thread(stream_out.write, data)
+                try:
+                    logger.info(f"🔊 [DEBUG] Reproduciendo chunk de audio de {len(data)} bytes...")
+                    await asyncio.to_thread(stream_out.write, data)
+                except Exception as e:
+                    logger.error(f"🔊 [DEBUG] Error al reproducir audio: {e}")
 
     async def start(self):
         self.is_running = True
+        self.silence_frames = 0
         
         # Iniciar hardware threads if needed
-        p_out = None
         stream_out = None
         if self.use_audio_hardware:
-            asyncio.create_task(asyncio.to_thread(self._hardware_audio_in_loop))
-            p_out = pyaudio.PyAudio()
-            stream_out = p_out.open(format=FORMAT, channels=CHANNELS, rate=RATE_OUT, output=True, frames_per_buffer=CHUNK)
-            asyncio.create_task(self._audio_out_consumer(stream_out))
+            try:
+                self.pa = pyaudio.PyAudio()
+                asyncio.create_task(asyncio.to_thread(self._hardware_audio_in_loop))
+                stream_out = self.pa.open(format=FORMAT, channels=CHANNELS, rate=RATE_OUT, output=True, frames_per_buffer=CHUNK)
+                asyncio.create_task(self._audio_out_consumer(stream_out))
+            except Exception as e:
+                logger.error(f"Error abriendo parlantes PyAudio: {e}")
+        
+        system_prompt = self.profile.system_instruction + "\n\nResponde de manera natural y conversacional a lo que escuches."
         
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
-            system_instruction=types.Content(parts=[types.Part.from_text(self.profile.system_instruction)]),
+            system_instruction=types.Content(parts=[types.Part.from_text(system_prompt)]),
             tools=self._build_tools()
         )
         
@@ -174,11 +201,30 @@ class CafEngine:
                                 
                                 # Then audio
                                 data = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.1)
-                                await session.send(input={"data": data, "mime_type": "audio/pcm;rate=16000"}, end_of_turn=False)
+                                import audioop
+                                rms = audioop.rms(data, 2)
+                                
+                                # Si hay silencio continuo por 1.5s
+                                if rms < 250:
+                                    self.silence_frames += 1
+                                else:
+                                    self.silence_frames = 0
+                                    
+                                if self.silence_frames > int(16000 / 1024 * 1.5):
+                                    # Ya mandamos el end_of_turn, ahora simplemente dropeamos los chunks de silencio
+                                    continue
+                                    
+                                is_end = False
+                                if self.silence_frames == int(16000 / 1024 * 1.5):
+                                    is_end = True
+                                    logger.info("🎙️ [DEBUG] Silencio detectado, forzando end_of_turn=True")
+                                    
+                                await session.send(input={"data": data, "mime_type": "audio/pcm;rate=16000"}, end_of_turn=is_end)
                             except asyncio.TimeoutError:
                                 await asyncio.sleep(0.01)
                                 
                     async def receiver():
+                        has_indicated_audio = False
                         async for response in session.receive():
                             server_content = response.server_content
                             if server_content is not None:
@@ -194,8 +240,14 @@ class CafEngine:
                                         if part.inline_data:
                                             self.audio_out_queue.put_nowait(part.inline_data.data)
                                             self.events_queue.put_nowait({"estado": "hablando"})
+                                            if not has_indicated_audio:
+                                                self.events_queue.put_nowait({"transcripcion": {"rol": "caf", "texto": "🔊 (Respondiendo por voz...)"}})
+                                                has_indicated_audio = True
                                         if part.text:
                                             self.events_queue.put_nowait({"transcripcion": {"rol": "caf", "texto": part.text}})
+                                            
+                                if server_content.turn_complete:
+                                    has_indicated_audio = False
                                             
                             if response.tool_call is not None:
                                 for function_call in response.tool_call.function_calls:
@@ -212,7 +264,8 @@ class CafEngine:
         if self.use_audio_hardware and stream_out:
             stream_out.stop_stream()
             stream_out.close()
-            p_out.terminate()
+            if hasattr(self, 'pa'):
+                self.pa.terminate()
 
     def stop(self):
         self.is_running = False
