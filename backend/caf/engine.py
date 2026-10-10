@@ -57,10 +57,22 @@ TOOLS = {
         params={"titulo": "Titulo del reporte", "contenido_markdown": "Contenido en markdown",
                 "formato": "'md' o 'txt'"},
         required=["titulo", "contenido_markdown"], fn=caf_tools.generar_reporte),
-    "spotify_buscar": dict(
-        desc="Abre Spotify mostrando los resultados de buscar una cancion, artista o disco. No la reproduce sola.",
-        params={"consulta": "Texto a buscar, ej. 'YSY A Oro y Platino'"},
-        required=["consulta"], fn=caf_tools.spotify_buscar),
+    "spotify_reproducir": dict(
+        desc="Reproduce una cancion en Spotify. Si Spotify no esta configurado para reproducir solo, abre la busqueda.",
+        params={"consulta": "Cancion y artista, ej. 'YSY A Oro y Platino'"},
+        required=["consulta"], fn=caf_tools.spotify_reproducir),
+    "youtube_reproducir": dict(
+        desc="Busca en YouTube y reproduce el primer resultado (cancion, video, tutorial, etc.).",
+        params={"consulta": "Que buscar en YouTube"},
+        required=["consulta"], fn=caf_tools.youtube_reproducir),
+    "abrir_url": dict(
+        desc="Abre una pagina web (http o https) en el navegador.",
+        params={"url": "Direccion completa, ej. https://es.wikipedia.org"},
+        required=["url"], fn=caf_tools.abrir_url),
+    "desactivar_asistente": dict(
+        desc=("Pone a Caf en modo espera (dormido). Usala cuando el usuario se despida o diga que te desactives: "
+              "'gracias Caf, ya podes desactivarte', 'chau Caf', 'dormi'. Despues despedite con una frase muy corta."),
+        params={}, required=[], fn=None),  # la maneja el motor
     "borrar_archivo": dict(
         desc="Borra un archivo de la carpeta de trabajo. Requiere confirmacion explicita del usuario ('si').",
         params={"ruta_relativa": "Ruta relativa del archivo", "confirmacion": "'si' solo si el usuario lo confirmo"},
@@ -128,15 +140,18 @@ class CafEngine:
     def __init__(self, profile_name="amiguito", use_audio_hardware=True, events_queue=None):
         from dotenv import load_dotenv
 
-        load_dotenv(Path(__file__).parent.parent / ".env")
+        base_dir = Path(__file__).resolve().parent.parent
+        load_dotenv(base_dir / ".env", override=True)
+        load_dotenv(base_dir.parent / "Caf" / ".env", override=True)
+        load_dotenv(base_dir.parent / ".env", override=True)
 
-        api_key = None
-        try:  # keyring es opcional: clave guardada desde la UI de Coucou
-            import keyring
-            api_key = keyring.get_password("fr.louisraille.coucou", "caf-api-key")
-        except Exception:
-            pass
-        api_key = api_key or os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            try:  # keyring es opcional: clave guardada desde la UI de Coucou
+                import keyring
+                api_key = keyring.get_password("fr.louisraille.coucou", "caf-api-key")
+            except Exception:
+                pass
         if not api_key:
             raise ValueError("API Key no encontrada: agregala en Coucou o en backend/.env (GEMINI_API_KEY).")
 
@@ -172,6 +187,29 @@ class CafEngine:
         self._ptt_hooks = []
         self._last_gate_log = 0.0
 
+        # Modo espera con palabra de activacion local ("Caf"). Si falta Vosk o el modelo, queda siempre activo.
+        self.wake = None
+        self.wake_enabled = False
+        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "60"))
+        self._preroll = deque(maxlen=int(2.5 * RATE_IN / CHUNK))  # ~2,5 s de audio previo a la activacion
+        self._last_activity = time.monotonic()
+        self._sleep_after_speech = False
+        self._sleep_deadline = 0.0
+        self._wake_requested = False
+        if os.getenv("CAF_WAKE", "1") == "1" and use_audio_hardware and not self.ptt_enabled:
+            try:
+                from caf.wake import WakeWord, find_model_path
+                model_path = find_model_path()
+                if model_path is None:
+                    logger.warning("No encontre el modelo de Vosk (carpeta modelo_vosk): sin modo espera. "
+                                   "Definí CAF_VOSK_MODEL con la ruta.")
+                else:
+                    self.wake = WakeWord(model_path)
+                    self.wake_enabled = True
+            except Exception as e:
+                logger.warning(f"Palabra de activacion no disponible ({e}): sin modo espera.")
+        self.mode = "dormido" if self.wake_enabled else "activo"
+
     # ---------------------------------------------------------------- eventos
     def _emit(self, event: dict):
         self.events_queue.put_nowait(event)
@@ -184,24 +222,40 @@ class CafEngine:
     # ---------------------------------------------------------------- config
     def _build_tools(self):
         decls = []
-        for name in self.profile.herramientas:
+        names = list(self.profile.herramientas)
+        if self.wake_enabled and "desactivar_asistente" not in names:
+            names.append("desactivar_asistente")  # siempre disponible en modo espera
+        for name in names:
+            if name == "google_search":
+                continue
             spec = TOOLS.get(name)
             if not spec:
                 logger.warning(f"Herramienta '{name}' del perfil no existe, se ignora.")
                 continue
-            decls.append(types.FunctionDeclaration(
-                name=name,
-                description=spec["desc"],
-                parameters=types.Schema(
+            decl = dict(name=name, description=spec["desc"])
+            if spec["params"]:
+                decl["parameters"] = types.Schema(
                     type="OBJECT",
                     properties={k: types.Schema(type="STRING", description=d) for k, d in spec["params"].items()},
                     required=spec["required"] or None,
-                ),
-            ))
-        return [types.Tool(function_declarations=decls)] if decls else None
+                )
+            decls.append(types.FunctionDeclaration(**decl))
+        tools = []
+        if "google_search" in self.profile.herramientas and os.getenv("CAF_SEARCH", "0") == "1":
+            tools.append(types.Tool(google_search=types.GoogleSearch()))  # buscar en internet
+        if decls:
+            tools.append(types.Tool(function_declarations=decls))
+        return tools or None
 
     def _build_config(self):
-        prompt = self.profile.system_instruction + "\n\nResponde de manera natural y conversacional a lo que escuches."
+        prompt = self.profile.system_instruction + """
+
+REGLAS GENERALES (valen siempre):
+- Si el usuario te llama por tu nombre ("Caf") sin pedir nada más, contestá solamente: "Sí, decime qué necesitás." y esperá.
+- Llamá a la herramienta desactivar_asistente SOLO si el usuario pide explícitamente que te desactives, te duermas o se despide ("ya podés desactivarte", "chau Caf", "dormí", "hasta luego"). Un simple "gracias" NO es una despedida: contestá brevemente y seguí atento. Al desactivarte, despedite con una frase muy corta.
+- El usuario a veces piensa en voz alta: dice "eh...", hace pausas largas o deja frases sin terminar. Esperá en silencio y respondé recién cuando quede claro que terminó su pedido. Si dice "esperá" o "me quedé pensando", esperá hasta que retome.
+- Si te piden información actual (noticias, datos, precios, clima, resultados), buscala en internet y respondé con un resumen corto.
+- Respondé de manera natural y conversacional a lo que escuches."""
         kwargs = dict(
             response_modalities=["AUDIO"],
             system_instruction=types.Content(parts=[types.Part(text=prompt)]),
@@ -220,8 +274,10 @@ class CafEngine:
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
                         start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                        # LOW = tarda mas en dar por terminada la frase (tolera "eh..." y pausas largas)
+                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                         prefix_padding_ms=100,
-                        silence_duration_ms=int(os.getenv("CAF_SILENCE_MS", "700")),
+                        silence_duration_ms=int(os.getenv("CAF_SILENCE_MS", "1800")),
                     )),
             )
             if os.getenv("CAF_PROACTIVE", "0") == "1":
@@ -263,7 +319,10 @@ class CafEngine:
             except asyncio.TimeoutError:
                 if self._playing and time.monotonic() > self._mute_until:
                     self._playing = False
-                    self._set_estado("escuchando")
+                    if self._sleep_after_speech:
+                        self._go_to_sleep("el asistente se despidio")  # ya se despidio
+                    else:
+                        self._set_estado("escuchando")
                 continue
             self._playing = True
             try:
@@ -279,11 +338,53 @@ class CafEngine:
         if down:
             self._ptt_tail = 5  # ~320 ms extra tras soltar, para no cortar la ultima palabra
 
+    # ---------------------------------------------------------------- modo espera / activo
+    def request_wake(self):
+        self._wake_requested = True
+
+    def request_sleep(self):
+        self._go_to_sleep()
+
+    async def _activate(self, session, flush=True):
+        self.mode = "activo"
+        self._last_activity = time.monotonic()
+        self._emit({"modo": "activo"})
+        self._set_estado("escuchando")
+        if self.gate:  # dejar la compuerta abierta para lo que sigue de la frase
+            self.gate.open = True
+            self.gate.hang = self.gate.hang_chunks
+        if flush:  # mandar los ultimos segundos: "Caf, poné música" llega completo
+            for chunk in list(self._preroll):
+                await session.send_realtime_input(audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000"))
+        self._preroll.clear()
+        logger.info("Caf activado")
+
+    def _go_to_sleep(self, motivo="despedida"):
+        if not self.wake_enabled or self.mode == "dormido":
+            return
+        logger.info(f"Modo espera. Motivo: {motivo}")
+        self.mode = "dormido"
+        self._sleep_after_speech = False
+        self._sleep_deadline = 0.0
+        self._preroll.clear()
+        if self.wake:
+            self.wake.reset()
+        self._emit({"modo": "dormido"})
+        self._set_estado("dormido")
+        logger.info("Caf en modo espera (decí 'Caf' para activarlo)")
+
     async def _sender(self, session):
         while self.is_running:
+            if self._wake_requested:
+                self._wake_requested = False
+                if self.mode == "dormido":
+                    await self._activate(session, flush=False)
             if not self.text_in_queue.empty():
                 text = self.text_in_queue.get_nowait()
+                if self.mode == "dormido":
+                    await self._activate(session, flush=False)
                 await session.send_realtime_input(text=text)
+                self._last_activity = time.monotonic()
                 self._emit({"transcripcion": {"rol": "usuario", "texto": text}})
                 continue
             try:
@@ -292,6 +393,19 @@ class CafEngine:
                 continue
             if self.muted:
                 continue
+            if self.wake_enabled:
+                now = time.monotonic()
+                if self.mode == "dormido":
+                    self._preroll.append(data)
+                    if await asyncio.to_thread(self.wake.feed, data):
+                        await self._activate(session)
+                    continue
+                if self._sleep_deadline and now > self._sleep_deadline:
+                    self._go_to_sleep("la despedida no llego a sonar a tiempo")
+                    continue
+                if now - self._last_activity > self.idle_seconds and not self._playing:
+                    self._go_to_sleep(f"{self.idle_seconds:.0f}s sin actividad")
+                    continue
             if not self.headphones and not self._ptt_down and (self._playing or time.monotonic() < self._mute_until):
                 continue  # evita eco: no mandar el mic mientras suena Caf
 
@@ -308,6 +422,8 @@ class CafEngine:
             elif self.gate:
                 was_open = self.gate.open
                 chunks = self.gate.process(data)
+                if self.gate.open:
+                    self._last_activity = time.monotonic()
                 if self.gate.open != was_open:
                     logger.debug(f"gate {'ABIERTA' if self.gate.open else 'cerrada'} "
                                  f"(rms={self.gate.last_rms}, umbral={self.gate.threshold:.0f})")
@@ -344,9 +460,11 @@ class CafEngine:
             if sc.model_turn:
                 for part in sc.model_turn.parts or []:
                     if part.inline_data and part.inline_data.data:
+                        self._last_activity = time.monotonic()
                         self.audio_out_queue.put_nowait(part.inline_data.data)
                         self._set_estado("hablando")
             if sc.input_transcription and sc.input_transcription.text:
+                self._last_activity = time.monotonic()
                 self._emit({"transcripcion": {"rol": "usuario", "texto": sc.input_transcription.text}})
             if sc.output_transcription and sc.output_transcription.text:
                 self._emit({"transcripcion": {"rol": "caf", "texto": sc.output_transcription.text}})
@@ -366,6 +484,13 @@ class CafEngine:
         try:
             if not spec:
                 res = f"Herramienta desconocida: {fc.name}"
+            elif fc.name == "desactivar_asistente":
+                if self.wake_enabled:
+                    self._sleep_after_speech = True
+                    self._sleep_deadline = time.monotonic() + 8  # por si no llega a decir nada
+                    res = "Listo, entrando en modo espera. Despedite con una frase muy corta."
+                else:
+                    res = "El modo espera no está disponible en esta sesión."
             else:
                 args = {k: v for k, v in (fc.args or {}).items() if k in spec["params"]}
                 res = await asyncio.wait_for(asyncio.to_thread(spec["fn"], **args), timeout=TOOL_TIMEOUT)
@@ -380,6 +505,18 @@ class CafEngine:
                 types.FunctionResponse(id=fc.id, name=fc.name, response={"result": res})])
         except Exception as e:
             logger.error(f"No se pudo enviar la respuesta de la tool: {e}")
+
+    def _setup_wake_key(self):
+        """Tecla de respaldo para despertarlo sin decir 'Caf' (por defecto F8)."""
+        if not self.wake_enabled:
+            return
+        key = os.getenv("CAF_WAKE_KEY", "f8")
+        try:
+            import keyboard
+            self._ptt_hooks.append(keyboard.on_press_key(key, lambda e: self.request_wake()))
+            logger.info(f"Tecla para despertar a Caf: '{key}'")
+        except Exception as ex:
+            logger.warning(f"No se pudo registrar la tecla de despertar ({ex})")
 
     def _setup_ptt(self):
         if not self.ptt_enabled:
@@ -416,6 +553,7 @@ class CafEngine:
                 bg.append(asyncio.create_task(self._speaker_consumer()))
 
             self._setup_ptt()
+            self._setup_wake_key()
 
             attempt = 0
             while self.is_running:
@@ -426,7 +564,8 @@ class CafEngine:
                         logger.info(f"Conectado a {MODEL}")
                         while not self.audio_in_queue.empty():  # audio viejo de antes de conectar
                             self.audio_in_queue.get_nowait()
-                        self._set_estado("escuchando")
+                        self._set_estado("escuchando" if self.mode == "activo" else "dormido")
+                        self._emit({"modo": self.mode})
                         tasks = [asyncio.create_task(self._sender(session)),
                                  asyncio.create_task(self._receiver(session))]
                         try:
@@ -443,6 +582,10 @@ class CafEngine:
                     raise
                 except Exception as e:
                     logger.exception("Error en la sesion Live")
+                    if ("quota" in str(e).lower() or "1011" in str(e)) and os.getenv("CAF_SEARCH", "0") == "1":
+                        logger.warning("Fallo de cuota en Google Search grounding. Desactivando CAF_SEARCH y reintentando...")
+                        os.environ["CAF_SEARCH"] = "0"
+                        continue
                     self._emit({"estado": "error", "detalle": str(e)})
                     attempt = 1 if time.monotonic() - connected_at > 10 else attempt + 1
                     if attempt >= 3:

@@ -18,6 +18,8 @@ async def print_events(engine):
                 print(f"\n{'Vos' if t['rol'] == 'usuario' else 'Caf'}: ", end="", flush=True)
                 ult_rol = t["rol"]
             print(t["texto"], end="", flush=True)
+        elif "modo" in ev:
+            print(f"\n[modo] {ev['modo']}")
         elif "herramienta" in ev:
             h = ev["herramienta"]
             print(f"\n[herramienta] {h['nombre']} -> {h['resultado']}")
@@ -43,7 +45,7 @@ async def run_console():
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
     engine = CafEngine(profile_name=args.profile, use_audio_hardware=not args.sin_audio)
-    print("Caf V2 listo. Hablá, o escribí un mensaje y Enter. Ctrl+C para salir.")
+    print("Caf V2 listo. Decí \"Caf\" para activarlo (o escribí un mensaje y Enter). Ctrl+C para salir.")
     helpers = [asyncio.create_task(print_events(engine)), asyncio.create_task(read_stdin(engine))]
     try:
         await engine.start()

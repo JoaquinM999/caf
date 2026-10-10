@@ -91,6 +91,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif action == "ptt" and engine:  # {"action":"ptt","down":true|false}
                     engine.ptt_enabled = True
                     engine.set_ptt(bool(msg.get("down")))
+                elif action == "despertar" and engine:
+                    engine.request_wake()
+                elif action == "dormir" and engine:
+                    engine.request_sleep()
                 elif action in ("silenciar", "activar") and engine:
                     engine.muted = action == "silenciar"
         except WebSocketDisconnect:
