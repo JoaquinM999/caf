@@ -1,271 +1,477 @@
+"""Motor de voz de Caf V2 (Gemini Live, audio bidireccional).
+
+Cambios clave respecto de la version anterior:
+- SDK google-genai actual (send_realtime_input / send_tool_response).
+- Sin `audioop` (no existe en Python 3.13+).
+- receive() devuelve UN turno: se llama en bucle.
+- Sin fallback a un modelo que no es Live.
+- Un unico consumidor de audio de salida (los parlantes locales).
+- Reconexion con backoff real y reanudacion de sesion.
+"""
 import asyncio
-import os
-import sys
-import pyaudio
-import traceback
 import logging
+import os
+import time
+from array import array
+from collections import deque
+from pathlib import Path
+
+import pyaudio
 from google import genai
 from google.genai import types
-from caf.profiles_manager import load_profile
+
 import caf.tools as caf_tools
+from caf.profiles_manager import load_profile
 
 logger = logging.getLogger(__name__)
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE_IN = 16000
-RATE_OUT = 24000
+RATE_IN = 16000   # lo que se manda a Gemini
+RATE_OUT = 24000  # lo que devuelve Gemini
 CHUNK = 1024
 
+MODEL = os.getenv("CAF_MODEL", "gemini-3.8-live")
+TOOL_TIMEOUT = 20  # segundos
+
+# nombre -> descripcion, parametros (todos STRING), requeridos, funcion
+TOOLS = {
+    "abrir_programa": dict(
+        desc="Abre un programa de la PC. Solo funciona con los de la lista blanca.",
+        params={"nombre": "Nombre del programa, ej. 'calculadora'"},
+        required=["nombre"], fn=caf_tools.abrir_programa),
+    "crear_archivo": dict(
+        desc="Crea un archivo de texto en la carpeta de trabajo.",
+        params={"ruta_relativa": "Ruta relativa, ej. 'notas/hola.txt'", "contenido": "Texto del archivo"},
+        required=["ruta_relativa", "contenido"], fn=caf_tools.crear_archivo),
+    "leer_archivo": dict(
+        desc="Lee un archivo de la carpeta de trabajo.",
+        params={"ruta_relativa": "Ruta relativa del archivo"},
+        required=["ruta_relativa"], fn=caf_tools.leer_archivo),
+    "listar_archivos": dict(
+        desc="Lista los archivos de la carpeta de trabajo.",
+        params={"ruta_relativa": "Directorio relativo, por defecto '.'"},
+        required=[], fn=caf_tools.listar_archivos),
+    "generar_reporte": dict(
+        desc="Genera un reporte en markdown en la carpeta de trabajo.",
+        params={"titulo": "Titulo del reporte", "contenido_markdown": "Contenido en markdown",
+                "formato": "'md' o 'txt'"},
+        required=["titulo", "contenido_markdown"], fn=caf_tools.generar_reporte),
+    "spotify_buscar": dict(
+        desc="Abre Spotify mostrando los resultados de buscar una cancion, artista o disco. No la reproduce sola.",
+        params={"consulta": "Texto a buscar, ej. 'YSY A Oro y Platino'"},
+        required=["consulta"], fn=caf_tools.spotify_buscar),
+    "borrar_archivo": dict(
+        desc="Borra un archivo de la carpeta de trabajo. Requiere confirmacion explicita del usuario ('si').",
+        params={"ruta_relativa": "Ruta relativa del archivo", "confirmacion": "'si' solo si el usuario lo confirmo"},
+        required=["ruta_relativa"], fn=caf_tools.borrar_archivo),
+}
+
+
+def _rms(data: bytes) -> int:
+    """Volumen RMS de un buffer Int16 (reemplazo de audioop.rms)."""
+    a = array("h")
+    a.frombytes(data[: len(data) - (len(data) % 2)])
+    if not a:
+        return 0
+    return int((sum(x * x for x in a) / len(a)) ** 0.5)
+
+
+class NoiseGate:
+    """Compuerta de ruido adaptativa (ventilador, murmullo de fondo).
+
+    Mide el piso de ruido y solo deja pasar el audio cuando el volumen lo supera
+    claramente. Lo que queda por debajo se reemplaza por silencio digital, asi el
+    detector de voz del servidor ve silencio limpio y cierra bien los turnos.
+    """
+
+    def __init__(self, min_open=120, ratio=4.0, hang_ms=700, preroll=4, open_after=2):
+        self.min_open = min_open
+        self.ratio = ratio
+        self.hang_chunks = max(1, int(hang_ms / (1000 * CHUNK / RATE_IN)))
+        self.open_after = open_after
+        self.pre = deque(maxlen=preroll)
+        self.floor = 60.0
+        self.open = False
+        self.hang = 0
+        self.hits = 0
+        self.last_rms = 0
+        self.threshold = min_open
+
+    def process(self, data: bytes):
+        rms = _rms(data)
+        self.last_rms = rms
+        self.threshold = max(self.min_open, self.floor * self.ratio)
+        loud = rms > self.threshold
+        if self.open:
+            self.hang = self.hang_chunks if loud else self.hang - 1
+            if self.hang <= 0:
+                self.open = False
+                self.hits = 0
+            return [data]
+        self.pre.append(data)
+        if loud:
+            self.hits += 1
+        else:
+            self.hits = 0
+            self.floor = 0.97 * self.floor + 0.03 * rms  # aprende el ruido ambiente
+        if self.hits >= self.open_after:
+            self.open = True
+            self.hang = self.hang_chunks
+            out = list(self.pre)  # pre-roll: no cortar el comienzo de la frase
+            self.pre.clear()
+            return out
+        return [bytes(len(data))]  # silencio digital
+
+
 class CafEngine:
-    def __init__(self, profile_name="amiguito", use_audio_hardware=True):
+    def __init__(self, profile_name="amiguito", use_audio_hardware=True, events_queue=None):
         from dotenv import load_dotenv
-        from pathlib import Path
-        import keyring
-        
+
         load_dotenv(Path(__file__).parent.parent / ".env")
-        
-        # Primero intentar desde el Credential Manager de Windows (Configurado en UI)
-        self.api_key = keyring.get_password("fr.louisraille.coucou", "caf-api-key")
-        
-        # Fallback al .env local
-        if not self.api_key:
-            self.api_key = os.getenv("GEMINI_API_KEY")
-            
-        if not self.api_key:
-            raise ValueError("API Key no encontrada. Por favor agregá la clave de Caf en la configuración de Coucou o en el archivo .env")
-            
-        self.client = genai.Client(api_key=self.api_key, http_options={'api_version': 'v1alpha'})
+
+        api_key = None
+        try:  # keyring es opcional: clave guardada desde la UI de Coucou
+            import keyring
+            api_key = keyring.get_password("fr.louisraille.coucou", "caf-api-key")
+        except Exception:
+            pass
+        api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("API Key no encontrada: agregala en Coucou o en backend/.env (GEMINI_API_KEY).")
+
+        self.client = genai.Client(api_key=api_key)  # sin forzar v1alpha
         self.profile = load_profile(profile_name)
-        
         self.use_audio_hardware = use_audio_hardware
+        # Con auriculares (CAF_HEADPHONES=1) el mic queda abierto mientras Caf habla.
+        # Sin auriculares se silencia el mic para que no se escuche a si mismo.
+        self.headphones = os.getenv("CAF_HEADPHONES", "0") == "1"
+
         self.is_running = False
-        
-        self.audio_in_queue = asyncio.Queue()
+        self.audio_in_queue = asyncio.Queue(maxsize=100)
         self.audio_out_queue = asyncio.Queue()
         self.text_in_queue = asyncio.Queue()
-        self.events_queue = asyncio.Queue() # Para emitir estados al frontend
-        
-        self.model = "gemini-2.0-flash" # Fallback
+        self.events_queue = events_queue if events_queue is not None else asyncio.Queue()
 
+        self._loop = None
+        self._pa = None
+        self._stream_in = None
+        self._stream_out = None
+        self._resume_handle = None
+        self._estado = None
+        self._playing = False
+        self._mute_until = 0.0
+
+        # Filtrado de ruido y push-to-talk (ver README en los comentarios de abajo)
+        self.gate = NoiseGate(min_open=int(os.getenv("CAF_GATE_MIN", "120"))) \
+            if os.getenv("CAF_GATE", "1") == "1" else None
+        self.ptt_enabled = os.getenv("CAF_PTT", "0") == "1"
+        self.muted = False
+        self._ptt_down = False
+        self._ptt_tail = 0
+        self._ptt_hooks = []
+        self._last_gate_log = 0.0
+
+    # ---------------------------------------------------------------- eventos
+    def _emit(self, event: dict):
+        self.events_queue.put_nowait(event)
+
+    def _set_estado(self, estado: str, detalle: str = ""):
+        if estado != self._estado or detalle:
+            self._estado = estado
+            self._emit({"estado": estado, "detalle": detalle} if detalle else {"estado": estado})
+
+    # ---------------------------------------------------------------- config
     def _build_tools(self):
-        declarations = []
-        if "abrir_programa" in self.profile.herramientas:
-            declarations.append(types.FunctionDeclaration(
-                name="abrir_programa",
-                description="Abre un programa en la PC. Solo puedes usar los que están en la lista blanca.",
-                parameters=types.Schema(type="OBJECT", properties={"nombre": types.Schema(type="STRING")}, required=["nombre"])
+        decls = []
+        for name in self.profile.herramientas:
+            spec = TOOLS.get(name)
+            if not spec:
+                logger.warning(f"Herramienta '{name}' del perfil no existe, se ignora.")
+                continue
+            decls.append(types.FunctionDeclaration(
+                name=name,
+                description=spec["desc"],
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={k: types.Schema(type="STRING", description=d) for k, d in spec["params"].items()},
+                    required=spec["required"] or None,
+                ),
             ))
-        if "crear_archivo" in self.profile.herramientas:
-            declarations.append(types.FunctionDeclaration(
-                name="crear_archivo",
-                description="Crea un archivo de texto en la carpeta de trabajo.",
-                parameters=types.Schema(type="OBJECT", properties={"ruta_relativa": types.Schema(type="STRING"), "contenido": types.Schema(type="STRING")}, required=["ruta_relativa", "contenido"])
-            ))
-        if "leer_archivo" in self.profile.herramientas:
-            declarations.append(types.FunctionDeclaration(
-                name="leer_archivo",
-                description="Lee el contenido de un archivo en la carpeta de trabajo.",
-                parameters=types.Schema(type="OBJECT", properties={"ruta_relativa": types.Schema(type="STRING")}, required=["ruta_relativa"])
-            ))
-        if "listar_archivos" in self.profile.herramientas:
-            declarations.append(types.FunctionDeclaration(
-                name="listar_archivos",
-                description="Lista los archivos en la carpeta de trabajo.",
-                parameters=types.Schema(type="OBJECT", properties={"ruta_relativa": types.Schema(type="STRING", description="Directorio relativo, usualmente '.'")}, required=["ruta_relativa"])
-            ))
-        if "generar_reporte" in self.profile.herramientas:
-            declarations.append(types.FunctionDeclaration(
-                name="generar_reporte",
-                description="Genera un reporte markdown.",
-                parameters=types.Schema(type="OBJECT", properties={"titulo": types.Schema(type="STRING"), "contenido_markdown": types.Schema(type="STRING"), "formato": types.Schema(type="STRING")}, required=["titulo", "contenido_markdown"])
-            ))
-        if "borrar_archivo" in self.profile.herramientas:
-            declarations.append(types.FunctionDeclaration(
-                name="borrar_archivo",
-                description="Borra un archivo en la carpeta de trabajo. ATENCION: Requiere confirmación.",
-                parameters=types.Schema(type="OBJECT", properties={"ruta_relativa": types.Schema(type="STRING"), "confirmacion": types.Schema(type="STRING")}, required=["ruta_relativa"])
-            ))
-        if not declarations:
-            return None
-        return [{"function_declarations": declarations}]
+        return [types.Tool(function_declarations=decls)] if decls else None
 
-    async def _handle_tool_call(self, function_call, session):
-        logger.info(f"Tool solicitada: {function_call.name} {function_call.args}")
-        self.events_queue.put_nowait({"estado": "ejecutando_herramienta", "detalle": function_call.name})
-        try:
-            if function_call.name == "abrir_programa": res = await asyncio.to_thread(caf_tools.abrir_programa, function_call.args.get("nombre", ""))
-            elif function_call.name == "crear_archivo": res = await asyncio.to_thread(caf_tools.crear_archivo, function_call.args.get("ruta_relativa", ""), function_call.args.get("contenido", ""))
-            elif function_call.name == "leer_archivo": res = await asyncio.to_thread(caf_tools.leer_archivo, function_call.args.get("ruta_relativa", ""))
-            elif function_call.name == "listar_archivos": res = await asyncio.to_thread(caf_tools.listar_archivos, function_call.args.get("ruta_relativa", "."))
-            elif function_call.name == "generar_reporte": res = await asyncio.to_thread(caf_tools.generar_reporte, function_call.args.get("titulo", ""), function_call.args.get("contenido_markdown", ""), function_call.args.get("formato", "md"))
-            elif function_call.name == "borrar_archivo": res = await asyncio.to_thread(caf_tools.borrar_archivo, function_call.args.get("ruta_relativa", ""), function_call.args.get("confirmacion", "no"))
-            else: res = f"Herramienta desconocida: {function_call.name}"
-        except Exception as e:
-            res = f"Error interno en herramienta: {str(e)}"
-            
-        logger.info(f"Tool resuelta: {res}")
-        self.events_queue.put_nowait({"herramienta": {"nombre": function_call.name, "resultado": res}})
-        await session.send(input=types.LiveClientToolResponse(
-            function_responses=[types.FunctionResponse(id=function_call.id, name=function_call.name, response={"result": res})]
-        ))
+    def _build_config(self):
+        prompt = self.profile.system_instruction + "\n\nResponde de manera natural y conversacional a lo que escuches."
+        kwargs = dict(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(parts=[types.Part(text=prompt)]),
+            tools=self._build_tools(),
+        )
+        # NO usar thinking_config / thinking_level con gemini-3.8-live.
+        if os.getenv("CAF_MINIMAL", "0") != "1":
+            kwargs.update(
+                speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.profile.voz))),
+                input_audio_transcription=types.AudioTranscriptionConfig(),
+                output_audio_transcription=types.AudioTranscriptionConfig(),
+                context_window_compression=types.ContextWindowCompressionConfig(
+                    sliding_window=types.SlidingWindow()),
+                session_resumption=types.SessionResumptionConfig(handle=self._resume_handle),
+                realtime_input_config=types.RealtimeInputConfig(
+                    automatic_activity_detection=types.AutomaticActivityDetection(
+                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                        prefix_padding_ms=100,
+                        silence_duration_ms=int(os.getenv("CAF_SILENCE_MS", "700")),
+                    )),
+            )
+            if os.getenv("CAF_PROACTIVE", "0") == "1":
+                # El modelo puede decidir NO responder si lo que oye no es para el.
+                kwargs["proactivity"] = types.ProactivityConfig(proactive_audio=True)
+        return types.LiveConnectConfig(**kwargs)
 
-    def _hardware_audio_in_loop(self):
-        p = getattr(self, "pa", None)
-        if not p: return
-        try:
-            default_in = p.get_default_input_device_info()
-            logger.info(f"🎤 [DEBUG] Usando micrófono: {default_in['name']} (índice {default_in['index']})")
-            stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE_IN, input=True, frames_per_buffer=CHUNK, input_device_index=default_in['index'])
-        except Exception as e:
-            logger.error(f"Error abriendo microfono PyAudio: {e}")
-            return
-            
-        import audioop
-        import time
-        last_log = time.time()
-            
+    # ---------------------------------------------------------------- audio
+    def _push_mic(self, data: bytes):
+        """Se ejecuta en el loop de asyncio (via call_soon_threadsafe)."""
+        if self.audio_in_queue.full():
+            try:
+                self.audio_in_queue.get_nowait()  # descarta lo mas viejo
+            except asyncio.QueueEmpty:
+                pass
+        self.audio_in_queue.put_nowait(data)
+
+    def _mic_thread(self):
+        logger.info("Microfono capturando")
+        last_log = 0.0
         while self.is_running:
             try:
-                data = stream.read(CHUNK, exception_on_overflow=False)
-                
-                # Debug de volumen de entrada (1 vez por segundo si alguien habla)
-                rms = audioop.rms(data, 2)
-                if rms > 250 and time.time() - last_log > 1.0:
-                    logger.info(f"🎤 [DEBUG] Audio captado (volumen: {rms})")
-                    last_log = time.time()
-                    
-                self.audio_in_queue.put_nowait(data)
+                data = self._stream_in.read(CHUNK, exception_on_overflow=False)
             except Exception as e:
-                logger.error(f"Hardware In Error: {e}")
+                logger.error(f"Error leyendo microfono: {e}")
+                self._loop.call_soon_threadsafe(
+                    self._emit, {"estado": "error", "detalle": f"microfono: {e}"})
                 break
-        stream.stop_stream()
-        stream.close()
+            rms = _rms(data)
+            if rms > 250 and time.monotonic() - last_log > 1.0:
+                logger.debug(f"Audio captado (volumen {rms})")
+                last_log = time.monotonic()
+            self._loop.call_soon_threadsafe(self._push_mic, data)
 
-    def _hardware_audio_out_loop(self):
-        pass # Reemplazado por consumer
-
-    async def _audio_out_consumer(self, stream_out):
-        logger.info("🔊 [DEBUG] Iniciando hilo de reproducción de audio...")
+    async def _speaker_consumer(self):
         while self.is_running:
-            data = await self.audio_out_queue.get()
-            if data and stream_out:
-                try:
-                    logger.info(f"🔊 [DEBUG] Reproduciendo chunk de audio de {len(data)} bytes...")
-                    await asyncio.to_thread(stream_out.write, data)
-                except Exception as e:
-                    logger.error(f"🔊 [DEBUG] Error al reproducir audio: {e}")
+            try:
+                data = await asyncio.wait_for(self.audio_out_queue.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                if self._playing and time.monotonic() > self._mute_until:
+                    self._playing = False
+                    self._set_estado("escuchando")
+                continue
+            self._playing = True
+            try:
+                await asyncio.to_thread(self._stream_out.write, data)
+            except Exception as e:
+                logger.error(f"Error reproduciendo audio: {e}")
+            self._mute_until = time.monotonic() + 0.5
 
+    # ---------------------------------------------------------------- sesion
+    def set_ptt(self, down: bool):
+        """Push-to-talk: True mientras se mantiene apretada la tecla."""
+        self._ptt_down = down
+        if down:
+            self._ptt_tail = 5  # ~320 ms extra tras soltar, para no cortar la ultima palabra
+
+    async def _sender(self, session):
+        while self.is_running:
+            if not self.text_in_queue.empty():
+                text = self.text_in_queue.get_nowait()
+                await session.send_realtime_input(text=text)
+                self._emit({"transcripcion": {"rol": "usuario", "texto": text}})
+                continue
+            try:
+                data = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+            if self.muted:
+                continue
+            if not self.headphones and not self._ptt_down and (self._playing or time.monotonic() < self._mute_until):
+                continue  # evita eco: no mandar el mic mientras suena Caf
+
+            flush = False
+            if self.ptt_enabled:
+                if self._ptt_down:
+                    chunks = [data]
+                elif self._ptt_tail > 0:
+                    self._ptt_tail -= 1
+                    chunks = [data]
+                    flush = self._ptt_tail == 0
+                else:
+                    chunks = []
+            elif self.gate:
+                was_open = self.gate.open
+                chunks = self.gate.process(data)
+                if self.gate.open != was_open:
+                    logger.debug(f"gate {'ABIERTA' if self.gate.open else 'cerrada'} "
+                                 f"(rms={self.gate.last_rms}, umbral={self.gate.threshold:.0f})")
+                if time.monotonic() - self._last_gate_log > 2.0:
+                    self._last_gate_log = time.monotonic()
+                    logger.debug(f"gate: rms={self.gate.last_rms} piso={self.gate.floor:.0f} "
+                                 f"umbral={self.gate.threshold:.0f} abierta={self.gate.open}")
+            else:
+                chunks = [data]
+
+            for c in chunks:
+                await session.send_realtime_input(audio=types.Blob(data=c, mime_type="audio/pcm;rate=16000"))
+            if flush:
+                await session.send_realtime_input(audio_stream_end=True)
+
+    async def _receiver(self, session):
+        # receive() termina al completarse cada turno del modelo: hay que llamarlo en bucle.
+        while self.is_running:
+            got_any = False
+            async for response in session.receive():
+                got_any = True
+                await self._on_message(response, session)
+            if not got_any:
+                await asyncio.sleep(0.05)
+
+    async def _on_message(self, response, session):
+        sc = response.server_content
+        if sc is not None:
+            if sc.interrupted:
+                while not self.audio_out_queue.empty():
+                    self.audio_out_queue.get_nowait()
+                self._mute_until = 0.0
+                self._set_estado("escuchando")
+            if sc.model_turn:
+                for part in sc.model_turn.parts or []:
+                    if part.inline_data and part.inline_data.data:
+                        self.audio_out_queue.put_nowait(part.inline_data.data)
+                        self._set_estado("hablando")
+            if sc.input_transcription and sc.input_transcription.text:
+                self._emit({"transcripcion": {"rol": "usuario", "texto": sc.input_transcription.text}})
+            if sc.output_transcription and sc.output_transcription.text:
+                self._emit({"transcripcion": {"rol": "caf", "texto": sc.output_transcription.text}})
+        if response.tool_call:
+            for fc in response.tool_call.function_calls or []:
+                asyncio.create_task(self._run_tool(fc, session))
+        upd = response.session_resumption_update
+        if upd and upd.resumable and upd.new_handle:
+            self._resume_handle = upd.new_handle
+        if response.go_away:
+            raise ConnectionError(f"El servidor pidio cerrar la sesion (go_away): {response.go_away}")
+
+    async def _run_tool(self, fc, session):
+        logger.info(f"Tool solicitada: {fc.name} {fc.args}")
+        self._set_estado("ejecutando_herramienta", fc.name)
+        spec = TOOLS.get(fc.name)
+        try:
+            if not spec:
+                res = f"Herramienta desconocida: {fc.name}"
+            else:
+                args = {k: v for k, v in (fc.args or {}).items() if k in spec["params"]}
+                res = await asyncio.wait_for(asyncio.to_thread(spec["fn"], **args), timeout=TOOL_TIMEOUT)
+        except asyncio.TimeoutError:
+            res = f"Error: la herramienta {fc.name} tardo mas de {TOOL_TIMEOUT}s."
+        except Exception as e:
+            res = f"Error interno en herramienta: {e}"
+        logger.info(f"Tool resuelta: {res}")
+        self._emit({"herramienta": {"nombre": fc.name, "resultado": res}})
+        try:
+            await session.send_tool_response(function_responses=[
+                types.FunctionResponse(id=fc.id, name=fc.name, response={"result": res})])
+        except Exception as e:
+            logger.error(f"No se pudo enviar la respuesta de la tool: {e}")
+
+    def _setup_ptt(self):
+        if not self.ptt_enabled:
+            return
+        key = os.getenv("CAF_PTT_KEY", "f9")
+        try:
+            import keyboard
+            self._ptt_hooks = [
+                keyboard.on_press_key(key, lambda e: self.set_ptt(True)),
+                keyboard.on_release_key(key, lambda e: self.set_ptt(False)),
+            ]
+            logger.info(f"Push-to-talk activo: mantene apretada la tecla '{key}' para hablar")
+        except Exception as e:
+            self.ptt_enabled = False
+            logger.warning(f"No se pudo activar push-to-talk ({e}). Instala: pip install keyboard")
+
+    # ---------------------------------------------------------------- ciclo de vida
     async def start(self):
         self.is_running = True
-        self.silence_frames = 0
-        
-        # Iniciar hardware threads if needed
-        stream_out = None
-        if self.use_audio_hardware:
+        self._loop = asyncio.get_running_loop()
+        bg = []
+        try:
+            if self.use_audio_hardware:
+                try:
+                    self._pa = pyaudio.PyAudio()
+                    self._stream_in = self._pa.open(format=FORMAT, channels=CHANNELS, rate=RATE_IN,
+                                                    input=True, frames_per_buffer=CHUNK)
+                    self._stream_out = self._pa.open(format=FORMAT, channels=CHANNELS, rate=RATE_OUT,
+                                                     output=True, frames_per_buffer=CHUNK)
+                except Exception as e:
+                    self._emit({"estado": "error", "detalle": f"audio: {e}"})
+                    raise RuntimeError(f"No se pudo abrir el audio: {e}") from e
+                bg.append(asyncio.create_task(asyncio.to_thread(self._mic_thread)))
+                bg.append(asyncio.create_task(self._speaker_consumer()))
+
+            self._setup_ptt()
+
+            attempt = 0
+            while self.is_running:
+                connected_at = time.monotonic()
+                try:
+                    self._set_estado("reconectando" if attempt else "conectando", MODEL)
+                    async with self.client.aio.live.connect(model=MODEL, config=self._build_config()) as session:
+                        logger.info(f"Conectado a {MODEL}")
+                        while not self.audio_in_queue.empty():  # audio viejo de antes de conectar
+                            self.audio_in_queue.get_nowait()
+                        self._set_estado("escuchando")
+                        tasks = [asyncio.create_task(self._sender(session)),
+                                 asyncio.create_task(self._receiver(session))]
+                        try:
+                            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                            for t in done:
+                                t.result()  # re-lanza el error que corto la sesion
+                        finally:
+                            # Siempre cancelar y recoger las tareas hijas (tambien con Ctrl+C),
+                            # asi no quedan excepciones "never retrieved".
+                            for t in tasks:
+                                t.cancel()
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.exception("Error en la sesion Live")
+                    self._emit({"estado": "error", "detalle": str(e)})
+                    attempt = 1 if time.monotonic() - connected_at > 10 else attempt + 1
+                    if attempt >= 3:
+                        self._resume_handle = None  # por si el handle quedo invalido
+                    await asyncio.sleep(min(2 ** attempt, 30))
+        finally:
+            self.is_running = False
+            for t in bg[1:]:
+                t.cancel()  # consumidor de parlantes
+            if bg:  # el hilo del mic termina solo (is_running=False); esperarlo antes de cerrar el stream
+                try:
+                    await asyncio.wait_for(asyncio.shield(bg[0]), timeout=2)
+                except Exception:
+                    pass
             try:
-                self.pa = pyaudio.PyAudio()
-                asyncio.create_task(asyncio.to_thread(self._hardware_audio_in_loop))
-                stream_out = self.pa.open(format=FORMAT, channels=CHANNELS, rate=RATE_OUT, output=True, frames_per_buffer=CHUNK)
-                asyncio.create_task(self._audio_out_consumer(stream_out))
-            except Exception as e:
-                logger.error(f"Error abriendo parlantes PyAudio: {e}")
-        
-        system_prompt = self.profile.system_instruction + "\n\nResponde de manera natural y conversacional a lo que escuches."
-        
-        config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            system_instruction=types.Content(parts=[types.Part.from_text(system_prompt)]),
-            tools=self._build_tools()
-        )
-        
-        attempt = 0
-        while self.is_running:
-            try:
-                model_name = "gemini-3.8-live" if attempt == 0 else self.model
-                self.events_queue.put_nowait({"estado": "reconectando", "detalle": model_name})
-                async with self.client.aio.live.connect(model=model_name, config=config) as session:
-                    logger.info(f"Conectado a {model_name}")
-                    self.events_queue.put_nowait({"estado": "escuchando"})
-                    attempt = 0
-                    
-                    async def sender():
-                        while self.is_running:
-                            try:
-                                # Prioritize text
-                                if not self.text_in_queue.empty():
-                                    text = self.text_in_queue.get_nowait()
-                                    await session.send(input=text, end_of_turn=True)
-                                    self.events_queue.put_nowait({"transcripcion": {"rol": "usuario", "texto": text}})
-                                    continue
-                                
-                                # Then audio
-                                data = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.1)
-                                import audioop
-                                rms = audioop.rms(data, 2)
-                                
-                                # Si hay silencio continuo por 1.5s
-                                if rms < 250:
-                                    self.silence_frames += 1
-                                else:
-                                    self.silence_frames = 0
-                                    
-                                if self.silence_frames > int(16000 / 1024 * 1.5):
-                                    # Ya mandamos el end_of_turn, ahora simplemente dropeamos los chunks de silencio
-                                    continue
-                                    
-                                is_end = False
-                                if self.silence_frames == int(16000 / 1024 * 1.5):
-                                    is_end = True
-                                    logger.info("🎙️ [DEBUG] Silencio detectado, forzando end_of_turn=True")
-                                    
-                                await session.send(input={"data": data, "mime_type": "audio/pcm;rate=16000"}, end_of_turn=is_end)
-                            except asyncio.TimeoutError:
-                                await asyncio.sleep(0.01)
-                                
-                    async def receiver():
-                        has_indicated_audio = False
-                        async for response in session.receive():
-                            server_content = response.server_content
-                            if server_content is not None:
-                                if server_content.interrupted:
-                                    # Vaciar cola de audio saliente
-                                    while not self.audio_out_queue.empty():
-                                        self.audio_out_queue.get_nowait()
-                                    self.events_queue.put_nowait({"estado": "escuchando"})
-                                
-                                model_turn = server_content.model_turn
-                                if model_turn:
-                                    for part in model_turn.parts:
-                                        if part.inline_data:
-                                            self.audio_out_queue.put_nowait(part.inline_data.data)
-                                            self.events_queue.put_nowait({"estado": "hablando"})
-                                            if not has_indicated_audio:
-                                                self.events_queue.put_nowait({"transcripcion": {"rol": "caf", "texto": "🔊 (Respondiendo por voz...)"}})
-                                                has_indicated_audio = True
-                                        if part.text:
-                                            self.events_queue.put_nowait({"transcripcion": {"rol": "caf", "texto": part.text}})
-                                            
-                                if server_content.turn_complete:
-                                    has_indicated_audio = False
-                                            
-                            if response.tool_call is not None:
-                                for function_call in response.tool_call.function_calls:
-                                    asyncio.create_task(self._handle_tool_call(function_call, session))
-                                    
-                    await asyncio.gather(sender(), receiver())
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error en sesión Live: {e}")
-                attempt += 1
-                await asyncio.sleep(min(2 ** attempt, 30))
-                
-        if self.use_audio_hardware and stream_out:
-            stream_out.stop_stream()
-            stream_out.close()
-            if hasattr(self, 'pa'):
-                self.pa.terminate()
+                import keyboard
+                for h in self._ptt_hooks:
+                    keyboard.unhook(h)
+            except Exception:
+                pass
+            for s in (self._stream_in, self._stream_out):
+                try:
+                    if s:
+                        s.stop_stream()
+                        s.close()
+                except Exception:
+                    pass
+            if self._pa:
+                self._pa.terminate()
 
     def stop(self):
         self.is_running = False

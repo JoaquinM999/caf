@@ -1,13 +1,15 @@
 import os
 import yaml
 import subprocess
+import sys
 from pathlib import Path
+from urllib.parse import quote
 
 # Configuración de carpeta segura
 WORKSPACE_DIR = Path.home() / "CafWorkspace"
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
-CONFIG_PATH = Path("config.yaml")
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 def load_whitelist():
     if not CONFIG_PATH.exists():
@@ -32,7 +34,9 @@ def _safe_resolve(relative_path: str) -> Path:
     # Convertir a Path y resolver
     target = (WORKSPACE_DIR / relative_path).resolve()
     # Comprobar que WORKSPACE_DIR sea un padre estricto o el mismo
-    if not str(target).startswith(str(WORKSPACE_DIR.resolve())):
+    try:
+        target.relative_to(WORKSPACE_DIR.resolve())
+    except ValueError:
         raise ValueError(f"Acceso denegado: {relative_path} está fuera de la carpeta de trabajo.")
     return target
 
@@ -53,6 +57,22 @@ def abrir_programa(nombre: str) -> str:
         return f"Éxito: {nombre} ejecutado." if result.returncode == 0 else f"Error al ejecutar: {result.stderr.strip()}"
     except Exception as e:
         return f"Excepción al ejecutar {nombre}: {str(e)}"
+
+def spotify_buscar(consulta: str) -> str:
+    """Abre Spotify en los resultados de busqueda de `consulta` (no reproduce sola)."""
+    consulta = (consulta or "").strip()
+    if not consulta:
+        return "Error: falta el texto a buscar."
+    uri = "spotify:search:" + quote(consulta)  # el texto va codificado: no puede inyectar comandos
+    try:
+        if sys.platform == "win32":
+            os.startfile(uri)
+        else:
+            subprocess.run(["xdg-open", uri], timeout=10)
+        return f"Éxito: busqué '{consulta}' en Spotify (queda en la pantalla de resultados)."
+    except Exception as e:
+        return f"Error al abrir Spotify: {e}"
+
 
 def crear_archivo(ruta_relativa: str, contenido: str) -> str:
     """Crea o sobreescribe un archivo en la carpeta segura de trabajo."""
@@ -93,7 +113,10 @@ def listar_archivos(ruta_relativa: str = ".") -> str:
 def generar_reporte(titulo: str, contenido_markdown: str, formato: str = "md") -> str:
     """Genera un reporte markdown en la carpeta segura."""
     try:
-        filename = f"{titulo.replace(' ', '_')}.{formato}"
+        import re
+        formato = formato if formato in ("md", "txt") else "md"
+        safe_title = re.sub(r"[^\w\-]+", "_", titulo, flags=re.UNICODE).strip("_") or "reporte"
+        filename = f"{safe_title}.{formato}"
         target = _safe_resolve(filename)
         with open(target, "w", encoding="utf-8") as f:
             f.write(f"# {titulo}\\n\\n{contenido_markdown}")
