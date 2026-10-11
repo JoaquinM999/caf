@@ -121,35 +121,100 @@ def _spotify_client():
         cache_path=str(cache), open_browser=True))
 
 
+def _buscar_track_spotify(consulta: str) -> tuple[str | None, str | None]:
+    """Resuelve el Track ID y título de una canción en Spotify."""
+    import re
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        resultados = list(DDGS().text(f"site:open.spotify.com/track {consulta}", max_results=3))
+        for r in resultados:
+            url = r.get("href", "")
+            m = re.search(r"open\.spotify\.com/track/([a-zA-Z0-9]+)", url)
+            if m:
+                titulo = r.get("title", consulta).split(" | Spotify")[0].split(" - song and lyrics")[0]
+                return m.group(1), titulo
+    except Exception:
+        pass
+    return None, None
+
+
+def _enviar_tecla_media(vk_code: int):
+    """Envía un evento de tecla multimedia nativo en Windows."""
+    if sys.platform == "win32":
+        import ctypes
+        import time
+        ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+        time.sleep(0.05)
+        ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
+
+
 def spotify_reproducir(consulta: str) -> str:
-    """Reproduce una cancion en Spotify (API de Spotify, requiere Premium).
-    Si la API no esta configurada, abre la busqueda en la app como alternativa."""
+    """Reproduce una canción en Spotify.
+    Si SPOTIPY está configurado usa la API oficial; si no, automatiza la apertura y reproducción nativa en Windows."""
     consulta = (consulta or "").strip()
     if not consulta:
         return "Error: falta el texto a buscar."
-    if not (os.getenv("SPOTIPY_CLIENT_ID") and os.getenv("SPOTIPY_CLIENT_SECRET")):
-        # Spotify no esta configurado para reproducir solo: se reproduce en YouTube directamente.
-        r = youtube_reproducir(consulta)
-        if r.startswith("Éxito"):
-            return "Spotify todavía no está configurado para reproducir solo, así que la puse en YouTube. " + r
-        spotify_buscar(consulta)
-        return "No pude reproducirla: dejé abierta la búsqueda en Spotify. " + r
+
+    # 1. Si el usuario configuró API de Spotify (con cuenta Premium)
+    if os.getenv("SPOTIPY_CLIENT_ID") and os.getenv("SPOTIPY_CLIENT_SECRET"):
+        try:
+            sp = _spotify_client()
+            items = sp.search(q=consulta, type="track", limit=1)["tracks"]["items"]
+            if items:
+                track = items[0]
+                devices = sp.devices().get("devices", [])
+                if devices:
+                    device = next((d for d in devices if d.get("is_active")), devices[0])
+                    sp.start_playback(device_id=device["id"], uris=[track["uri"]])
+                    artistas = ", ".join(a["name"] for a in track["artists"])
+                    return f"Éxito: reproduciendo '{track['name']}' de {artistas} en Spotify."
+        except Exception:
+            pass  # Fallback a reproducción nativa directa en Windows
+
+    # 2. Vía nativa directa de Windows con Track ID
+    track_id, titulo = _buscar_track_spotify(consulta)
+    if track_id:
+        uri = f"spotify:track:{track_id}:play"
+        try:
+            if sys.platform == "win32":
+                os.startfile(uri)
+            else:
+                subprocess.run(["xdg-open", uri], timeout=10)
+            return f"Éxito: reproduciendo '{titulo or consulta}' en Spotify."
+        except Exception as e:
+            return f"Error al abrir Spotify: {e}"
+
+    # 3. Fallback: buscar en la app
+    uri = "spotify:search:" + quote(consulta)
     try:
-        sp = _spotify_client()
-        items = sp.search(q=consulta, type="track", limit=1)["tracks"]["items"]
-        if not items:
-            return f"Error: no encontré '{consulta}' en Spotify."
-        track = items[0]
-        devices = sp.devices().get("devices", [])
-        if not devices:
-            spotify_buscar(consulta)
-            return "Error: Spotify no tiene ningún dispositivo activo. Abrí la app de Spotify y pedímelo de nuevo."
-        device = next((d for d in devices if d.get("is_active")), devices[0])
-        sp.start_playback(device_id=device["id"], uris=[track["uri"]])
-        artistas = ", ".join(a["name"] for a in track["artists"])
-        return f"Éxito: reproduciendo '{track['name']}' de {artistas}."
+        if sys.platform == "win32":
+            os.startfile(uri)
+        else:
+            subprocess.run(["xdg-open", uri], timeout=10)
+        return f"Éxito: abrí '{consulta}' en Spotify."
     except Exception as e:
-        return f"Error con Spotify: {e}"
+        return f"Error al abrir Spotify: {e}"
+
+
+def spotify_pausar() -> str:
+    """Pausa o reanuda la reproducción en Spotify."""
+    _enviar_tecla_media(0xB3)  # VK_MEDIA_PLAY_PAUSE
+    return "Éxito: comando de pausa/reanudación enviado."
+
+
+def spotify_siguiente() -> str:
+    """Pasa a la siguiente canción en Spotify."""
+    _enviar_tecla_media(0xB0)  # VK_MEDIA_NEXT_TRACK
+    return "Éxito: siguiente canción."
+
+
+def spotify_anterior() -> str:
+    """Vuelve a la canción anterior en Spotify."""
+    _enviar_tecla_media(0xB1)  # VK_MEDIA_PREV_TRACK
+    return "Éxito: canción anterior."
 
 
 def buscar_web(consulta: str) -> str:

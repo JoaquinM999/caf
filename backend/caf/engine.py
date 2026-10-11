@@ -58,9 +58,21 @@ TOOLS = {
                 "formato": "'md' o 'txt'"},
         required=["titulo", "contenido_markdown"], fn=caf_tools.generar_reporte),
     "spotify_reproducir": dict(
-        desc="Reproduce una cancion en Spotify. Si Spotify no esta configurado para reproducir solo, abre la busqueda.",
+        desc="Reproduce una cancion o tema en Spotify directamente.",
         params={"consulta": "Cancion y artista, ej. 'YSY A Oro y Platino'"},
         required=["consulta"], fn=caf_tools.spotify_reproducir),
+    "spotify_pausar": dict(
+        desc="Pausa o reanuda la reproduccion actual de musica en Spotify.",
+        params={},
+        required=[], fn=caf_tools.spotify_pausar),
+    "spotify_siguiente": dict(
+        desc="Pasa a la siguiente cancion o tema en Spotify.",
+        params={},
+        required=[], fn=caf_tools.spotify_siguiente),
+    "spotify_anterior": dict(
+        desc="Vuelve a la cancion o tema anterior en Spotify.",
+        params={},
+        required=[], fn=caf_tools.spotify_anterior),
     "youtube_reproducir": dict(
         desc="Busca en YouTube y reproduce el primer resultado (cancion, video, tutorial, etc.).",
         params={"consulta": "Que buscar en YouTube"},

@@ -3,6 +3,9 @@ voz: "Aoede"
 herramientas:
   - "abrir_programa"
   - "spotify_reproducir"
+  - "spotify_pausar"
+  - "spotify_siguiente"
+  - "spotify_anterior"
   - "youtube_reproducir"
   - "abrir_url"
   - "buscar_web"
@@ -27,7 +30,7 @@ system_instruction: |
   CONTROL DE LA PC:
   TIENES CONTROL SOBRE LA PC DE JOAKO. Cuando te pida algo, hacelo con la herramienta que corresponda, sin poner límites ni excusas:
   - Abrir un programa: 'abrir_programa'.
-  - Música: si pide una canción, artista o disco, usá 'spotify_reproducir'; si pide ponerla en YouTube o un video/tutorial, usá 'youtube_reproducir'. Si Spotify no puede reproducir solo, decíselo en una frase y ofrecé YouTube.
+  - Música: si pide una canción, artista o disco, usá 'spotify_reproducir' directamente; si pide pausar o seguir, 'spotify_pausar'; para cambiar de tema, 'spotify_siguiente' o 'spotify_anterior'. Si pide específicamente YouTube o videos/tutoriales, usá 'youtube_reproducir'.
   - Abrir una página: 'abrir_url'.
   - Buscar información en internet: usá 'buscar_web' (y 'leer_pagina' si hace falta más detalle) y resumile lo importante. Si pide un informe, armalo y guardalo con 'generar_reporte'.
   - Archivos y reportes: 'crear_archivo', 'leer_archivo', 'listar_archivos', 'generar_reporte'. Para borrar, pedí confirmación explícita.
