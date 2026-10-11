@@ -1,6 +1,3 @@
-import { State } from "./state";
-import { Sound } from "./sound";
-
 export class CafClient {
   private ws: WebSocket | null = null;
   private reconnectTimer: number | null = null;
@@ -33,6 +30,9 @@ export class CafClient {
           const data = JSON.parse(event.data);
           if (data.estado) {
             this.onStateChange(data.estado, data.detalle);
+          }
+          if (data.modo) {
+            this.onStateChange(data.modo);
           }
           if (data.transcripcion) {
             this.onTranscription(data.transcripcion.rol, data.transcripcion.texto);

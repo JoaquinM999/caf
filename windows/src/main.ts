@@ -116,18 +116,29 @@ async function main() {
   const caf = new CafClient(
     (state, extra) => {
       console.log("CAF state:", state, extra);
-      if (state === "hablando") island.engine.setState("working");
-      else if (state === "pensando") island.engine.setState("thinking");
-      else if (state === "escuchando") {
-        // Maybe a small bounce to show it's listening
+      if (state === "hablando") {
+        State.voiceStatus = "Gemini está hablando...";
+        island.engine.setState("working");
+      } else if (state === "pensando") {
+        State.voiceStatus = "Gemini está pensando...";
+        island.engine.setState("thinking");
+      } else if (state === "escuchando") {
+        State.voiceStatus = "Te estoy escuchando...";
         island.engine.setState("idle");
         island.engine.triggerEmote("surprised", 0.5);
+      } else if (state === "dormido") {
+        State.voiceStatus = "Esperando tu voz...";
+        island.engine.setState("idle");
+      } else if (state === "error") {
+        State.voiceStatus = `Error: ${extra || "desconocido"}`;
+        island.engine.setState("error");
+      } else if (state === "ejecutando_herramienta") {
+        State.voiceStatus = `Ejecutando ${extra || "herramienta"}...`;
+        island.engine.setState("searching");
+      } else {
+        State.voiceStatus = state;
+        island.engine.setState("idle");
       }
-      else if (state === "error") island.engine.setState("error");
-      else if (state === "ejecutando_herramienta") {
-        island.engine.setState("searching"); // Gives a cool scanning animation
-      }
-      else island.engine.setState("idle");
       State.notify();
     },
     (role, text) => {
@@ -138,8 +149,7 @@ async function main() {
     }
   );
   caf.connect();
-  // Pass the client to State so chat.ts can use it to send text
-  (State as any).cafClient = caf;
+  State.cafClient = caf;
 
   island.launch();
 
