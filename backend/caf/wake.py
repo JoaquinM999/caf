@@ -11,8 +11,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Variantes que Vosk devolvia para "Caf" en la version anterior (afinadas con uso real). Se pueden cambiar con CAF_WAKE_WORDS.
-DEFAULT_WORDS = ("caf,cap,caz,gap,kaf,kav,caff,cif,gas,cat,calf,cafe,café,cash,cruz,craft,chat,cau,chau,sat")
+# Variantes que Vosk devuelve para "Caf" en español (afinadas con uso real). Se pueden cambiar con CAF_WAKE_WORDS.
+DEFAULT_WORDS = (
+    "caf,cap,caz,gap,kaf,kav,caff,cif,gas,cat,calf,cafe,café,cash,cruz,craft,chat,cau,chau,sat,"
+    "cal,can,campo,caso,car,caffe,coffe,coffee,cafecito,coucou,cucu,kuku,chef,kef,kuf,ka,cuf"
+)
 
 
 def find_model_path():
@@ -54,7 +57,7 @@ class WakeWord:
         tokens = text.lower().split()
         if not tokens:
             return False
-        return any(t in self.words for t in tokens[:3]) and len(tokens) <= self.max_words + 3
+        return any(t in self.words for t in tokens) and len(tokens) <= (self.max_words + 3)
 
     def feed(self, data: bytes) -> bool:
         if time.monotonic() - self._last < self.cooldown:
@@ -64,8 +67,9 @@ class WakeWord:
         else:
             text = json.loads(self.rec.PartialResult()).get("partial", "")
         if text:
-            logger.debug(f"wake: oigo '{text}'")
+            logger.info(f"Vosk escuchó: '{text}'")
         if self.matches(text):
+            logger.info(f"¡Activación por voz detectada! ('{text}') -> Despertando a Caf")
             self.rec.Reset()
             self._last = time.monotonic()
             return True

@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+from pathlib import Path
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -14,13 +16,35 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+# Configure logging with both stream and file handlers
+log_file = None
+if getattr(sys, "frozen", False):
+    log_file = Path(sys.executable).parent / "coucou-backend.log"
+elif os.environ.get("LOCALAPPDATA"):
+    log_file = Path(os.environ["LOCALAPPDATA"]) / "Coucou" / "coucou-backend.log"
+else:
+    log_file = Path("coucou-backend.log")
+
+handlers = [logging.StreamHandler(sys.stdout) if sys.stdout else logging.NullHandler()]
+try:
+    fh = logging.FileHandler(str(log_file), encoding="utf-8", mode="a")
+    fh.setLevel(logging.INFO)
+    handlers.append(fh)
+except Exception:
+    pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=handlers,
+    force=True,
+)
+logger = logging.getLogger("server")
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from caf.engine import CafEngine
 from caf.profiles_manager import get_available_profiles
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("server")
 
 app = FastAPI(title="Caf V2 Backend")
 
@@ -44,6 +68,9 @@ async def start_engine(profile_name: str):
     """(Re)inicia el motor con un perfil. Detiene el anterior primero."""
     global engine, engine_task
     async with _lock:
+        if engine is not None and engine.is_running and getattr(engine.profile, "nombre", "") == profile_name:
+            logger.info(f"Caf engine already active with profile '{profile_name}'; keeping running.")
+            return
         if engine is not None:
             engine.stop()
             if engine_task:
@@ -52,6 +79,15 @@ async def start_engine(profile_name: str):
         engine = CafEngine(profile_name=profile_name, use_audio_hardware=True, events_queue=events)
         engine_task = asyncio.create_task(engine.start())
         engine_task.add_done_callback(_on_done)
+
+
+@app.on_event("startup")
+async def on_startup():
+    logger.info("FastAPI startup: warming up Caf voice engine with profile 'amiguito'...")
+    try:
+        await start_engine("amiguito")
+    except Exception as e:
+        logger.error(f"Failed to auto-start engine on startup: {e!r}")
 
 
 @app.get("/")
