@@ -60,6 +60,30 @@ export class CafClient {
     }
   }
 
+  wake() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: "despertar" }));
+    }
+  }
+
+  sleep() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: "dormir" }));
+    }
+  }
+
+  toggle() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: "despertar" }));
+    }
+  }
+
+  mute(muted: boolean) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: muted ? "silenciar" : "activar" }));
+    }
+  }
+
   changeProfile(profile: string) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ action: "cambiar_perfil", profile }));

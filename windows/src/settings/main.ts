@@ -776,6 +776,8 @@ const INTEGRATIONS: IntegrationDef[] = [
     fields: [{ key: "calcom-api-key", label: N_("API key"), placeholder: "cal_…", secret: true }] },
   // Nothing to enter: Spotify is read over D-Bus (Linux only, see core/pills.ts).
   { id: "integration_spotify", name: "Spotify", color: "#1DB954", fields: [] },
+  { id: "integration_amiguito", name: "Caf (Voz con Gemini Live)", color: "#38BDF8", fields: [],
+    hint: N_("Asistente de voz en tiempo real con Gemini 3.8 Live y Vosk wake-word.") },
 ];
 
 const MAX_ACTIVE = MAX_DECLARED;

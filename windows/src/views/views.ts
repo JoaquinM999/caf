@@ -111,6 +111,16 @@ export function buildHeader(actions: ViewActions): ViewHost {
   const tabChat = h("button", { class: "tab", title: tl("Ask"), onclick: () => go("prompt") }, svg(ICONS.bubble, 13));
   const tabDrop = h("button", { class: "tab", title: tl("Drop"), onclick: () => go("upload") }, svg(ICONS.plus, 13));
 
+  const micBtn = h("button", {
+    class: "mic-btn",
+    title: "Caf Voice (Gemini Live)",
+    onclick: () => {
+      actions.blip();
+      if (State.cafClient) {
+        State.cafClient.toggle();
+      }
+    },
+  }, svg(ICONS.mic, 14));
   const gearBtn = h("button", { title: tl("Settings"), onclick: () => go("settings") }, svg(ICONS.gear, 14));
   const soundBtn = h("button", { title: tl("Mute"), onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
   // Plan usage pills (off by default): before the gear, Claude first, as on the Mac.
@@ -128,7 +138,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    h("div", { class: "header-actions" }, planPills, gearBtn, soundBtn),
+    h("div", { class: "header-actions" }, planPills, micBtn, gearBtn, soundBtn),
   );
   const headerActions = el.lastElementChild as HTMLElement;
 
@@ -144,6 +154,12 @@ export function buildHeader(actions: ViewActions): ViewHost {
       gearBtn.append(svg(v === "settings" ? ICONS.gearFill : ICONS.gear, 14));
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
+      clear(micBtn);
+      const isSpeaking = State.voiceStatus === "Gemini está hablando...";
+      const isListening = State.voiceStatus === "Te estoy escuchando..." || State.voiceStatus === "Esperando tu voz..." || State.voiceStatus === "Live";
+      micBtn.style.color = isSpeaking ? "#38bdf8" : isListening ? "#4ade80" : "var(--dim-2)";
+      micBtn.title = `Caf: ${State.voiceStatus}`;
+      micBtn.append(svg(ICONS.mic, 14));
       syncPlanPills();
       el.style.opacity = v === "confused" ? "0" : "1";
     },
