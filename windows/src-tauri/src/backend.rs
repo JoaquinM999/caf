@@ -23,6 +23,21 @@ pub fn start(app: &AppHandle) {
     if let Some(ref path) = exe_path {
         crate::log::line(format!("Starting Caf voice backend from: {}", path.display()));
         let mut cmd = Command::new(path);
+        if let Some(parent) = path.parent() {
+            cmd.current_dir(parent);
+            let log_path = parent.join("coucou-backend.log");
+            if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+                if let Ok(f_err) = f.try_clone() {
+                    cmd.stdout(f);
+                    cmd.stderr(f_err);
+                }
+            }
+        }
+
+        if let Some(key) = crate::secrets::get("caf-api-key").or_else(|| crate::secrets::get("google-api-key")) {
+            cmd.env("GEMINI_API_KEY", key);
+        }
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -37,6 +52,9 @@ pub fn start(app: &AppHandle) {
         crate::log::line("Attempting to start backend via python...");
         let mut cmd = Command::new("python");
         cmd.args(["-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", "8000"]);
+        if let Some(key) = crate::secrets::get("caf-api-key").or_else(|| crate::secrets::get("google-api-key")) {
+            cmd.env("GEMINI_API_KEY", key);
+        }
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 

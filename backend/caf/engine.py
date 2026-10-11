@@ -156,24 +156,75 @@ class NoiseGate:
         return [bytes(len(data))]  # silencio digital
 
 
+def find_api_key() -> str:
+    import sys
+    from dotenv import load_dotenv
+
+    # 1. Environment variables already in memory
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if key and key.strip():
+        return key.strip()
+
+    # 2. Keyring (from Coucou Settings UI)
+    try:
+        import keyring
+        for entry_name in ("caf-api-key", "google-api-key"):
+            k = keyring.get_password("fr.louisraille.coucou", entry_name)
+            if k and k.strip():
+                return k.strip()
+    except Exception:
+        pass
+
+    # 3. Check possible .env paths
+    candidates = []
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        candidates.extend([exe_dir / ".env", exe_dir / "backend" / ".env"])
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "Coucou" / ".env")
+    app_data = os.environ.get("APPDATA")
+    if app_data:
+        candidates.append(Path(app_data) / "Coucou" / ".env")
+    home = Path.home()
+    candidates.extend([home / ".caf" / ".env", home / ".coucou" / ".env", home / ".env"])
+
+    here = Path(__file__).resolve()
+    for base in (here.parents[1], here.parents[2] if len(here.parents) > 2 else here.parent):
+        candidates.extend([base / ".env", base / "Caf" / ".env", base / "backend" / ".env"])
+    candidates.extend([Path.cwd() / ".env", Path.cwd() / "backend" / ".env"])
+
+    for env_file in candidates:
+        if env_file.exists():
+            load_dotenv(env_file, override=False)
+            k = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if k and k.strip():
+                return k.strip()
+
+    # 4. Windows Registry HKCU\Environment (User environment variables)
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as reg_key:
+                for reg_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+                    try:
+                        val, _ = winreg.QueryValueEx(reg_key, reg_name)
+                        if val and val.strip():
+                            return val.strip()
+                    except FileNotFoundError:
+                        pass
+        except Exception:
+            pass
+
+    return ""
+
+
 class CafEngine:
     def __init__(self, profile_name="amiguito", use_audio_hardware=True, events_queue=None):
-        from dotenv import load_dotenv
-
-        base_dir = Path(__file__).resolve().parent.parent
-        load_dotenv(base_dir / ".env", override=True)
-        load_dotenv(base_dir.parent / "Caf" / ".env", override=True)
-        load_dotenv(base_dir.parent / ".env", override=True)
-
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = find_api_key()
         if not api_key:
-            try:  # keyring es opcional: clave guardada desde la UI de Coucou
-                import keyring
-                api_key = keyring.get_password("fr.louisraille.coucou", "caf-api-key")
-            except Exception:
-                pass
-        if not api_key:
-            raise ValueError("API Key no encontrada: agregala en Coucou o en backend/.env (GEMINI_API_KEY).")
+            raise ValueError("API Key no encontrada: configúrala en Ajustes de Coucou (Caf) o en el archivo .env (GEMINI_API_KEY).")
 
         self.client = genai.Client(api_key=api_key)  # sin forzar v1alpha
         self.profile = load_profile(profile_name)

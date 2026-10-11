@@ -53,7 +53,8 @@
     ],
     "resources": {
       "../target/release/coucou-hook.exe": "coucou-hook.exe",
-      "../../Caf/modelo_vosk": "modelo_vosk"
+      "../../Caf/modelo_vosk": "modelo_vosk",
+      "../../.env": ".env"
     },
     "copyright": "© Louis Raille",
     "category": "DeveloperTool",
