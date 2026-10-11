@@ -358,8 +358,11 @@ export class Island {
     }
     if (prev === "expanded") {
       Sound.play("close");
-      // A folded card is still waiting: it keeps the island pinned.
-      if (!State.pendingApproval) State.isPinned = false;
+      // Only unpin when moving to hidden or if not explicitly pinned
+      if (mode === "hidden") {
+        State.isPinned = false;
+        this.fsm.pinned = false;
+      }
       void Bridge.focusWindow(false);
       void Bridge.setAlwaysOnTop(false);
     }
@@ -419,8 +422,9 @@ export class Island {
       this.foldApproval();
       return;
     }
-    State.isPinned = false;
-    this.fsm.pinned = false;
+    // Keep the compact island pinned on desktop so it does not auto-hide to hidden
+    State.isPinned = true;
+    this.fsm.pinned = true;
     // Drive the state machine rather than the mode: setting the mode behind its
     // back left it thinking the island was still open, and a click on the compact
     // island then did nothing — the island could never be reopened.

@@ -63,6 +63,9 @@ export function runGlobalShortcut(host: ShortcutHost, action: string, resume: ()
     case "openChat":
       resume();
       host.alert("prompt");
+      if (State.cafClient) {
+        State.cafClient.toggle();
+      }
       break;
 
     case "goToAlert": {
@@ -202,6 +205,17 @@ export function registerShortcutHandlers(host: ShortcutHost, resume: () => void)
     "keydown",
     (e: KeyboardEvent) => {
       if (State.mode !== "expanded") return;
+      if (!inTextField(e.target)) {
+        if ((e.ctrlKey && e.key.toLowerCase() === "m") || e.key.toLowerCase() === "m") {
+          e.preventDefault();
+          e.stopPropagation();
+          Sound.play("blip");
+          if (State.cafClient) {
+            State.cafClient.toggle();
+          }
+          return;
+        }
+      }
       const action = islandKeyAction(e, { view: State.view, inTextField: inTextField(e.target) });
       if (!action) return;
       e.preventDefault();

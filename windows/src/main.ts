@@ -122,20 +122,30 @@ async function main() {
       } else if (state === "pensando") {
         State.voiceStatus = "Gemini está pensando...";
         island.engine.setState("thinking");
+        Sound.play("think");
       } else if (state === "escuchando") {
         State.voiceStatus = "Te estoy escuchando...";
         island.engine.setState("idle");
         island.engine.triggerEmote("surprised", 0.5);
+        Sound.play("peek");
       } else if (state === "dormido") {
         State.voiceStatus = "Esperando tu voz...";
         island.engine.setState("idle");
         island.engine.triggerEmote("wink", 0.8);
+        Sound.play("sleep");
       } else if (state === "error") {
         State.voiceStatus = `Error: ${extra || "desconocido"}`;
         island.engine.setState("error");
+        Sound.play("error");
       } else if (state === "ejecutando_herramienta") {
         State.voiceStatus = `Ejecutando ${extra || "herramienta"}...`;
         island.engine.setState("searching");
+        Sound.play("search");
+      } else if (state === "conectado") {
+        State.voiceStatus = "Conectado a Gemini";
+        island.engine.setState("idle");
+      } else if (state === "desconectado") {
+        State.voiceStatus = "Reconectando con el asistente...";
       } else {
         State.voiceStatus = state;
         island.engine.setState("idle");

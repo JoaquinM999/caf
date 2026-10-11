@@ -1,6 +1,7 @@
 export class CafClient {
   private ws: WebSocket | null = null;
   private reconnectTimer: number | null = null;
+  private attempts = 0;
   private onStateChange: (state: string, extra?: any) => void;
   private onTranscription: (role: string, text: string) => void;
 
@@ -13,15 +14,22 @@ export class CafClient {
   }
 
   connect() {
-    if (this.ws) return;
-    this.ws = new WebSocket("ws://127.0.0.1:8000/ws");
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
+    try {
+      this.ws = new WebSocket("ws://127.0.0.1:8000/ws");
+    } catch {
+      this.scheduleReconnect();
+      return;
+    }
 
     this.ws.onopen = () => {
       console.log("CafClient connected.");
+      this.attempts = 0;
       if (this.reconnectTimer) {
         window.clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
+      this.onStateChange("conectado");
     };
 
     this.ws.onmessage = (event) => {
@@ -44,14 +52,30 @@ export class CafClient {
     };
 
     this.ws.onclose = () => {
-      console.log("CafClient disconnected. Reconnecting in 2s...");
       this.ws = null;
-      this.reconnectTimer = window.setTimeout(() => this.connect(), 2000);
+      this.onStateChange("desconectado");
+      this.scheduleReconnect();
     };
 
     this.ws.onerror = (e) => {
-      console.error("CafClient error:", e);
+      console.warn("CafClient error:", e);
     };
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) return;
+    this.attempts++;
+    const delay = Math.min(1000 * Math.pow(1.3, this.attempts), 6000);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
+  sendPtt(down: boolean) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: "ptt", down }));
+    }
   }
 
   sendText(text: string) {

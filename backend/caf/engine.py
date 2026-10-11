@@ -323,14 +323,39 @@ REGLAS GENERALES (valen siempre):
     def _mic_thread(self):
         logger.info("Microfono capturando")
         last_log = 0.0
+        consecutive_errors = 0
         while self.is_running:
             try:
                 data = self._stream_in.read(CHUNK, exception_on_overflow=False)
+                consecutive_errors = 0
             except Exception as e:
-                logger.error(f"Error leyendo microfono: {e}")
-                self._loop.call_soon_threadsafe(
-                    self._emit, {"estado": "error", "detalle": f"microfono: {e}"})
-                break
+                consecutive_errors += 1
+                logger.warning(f"Error temporal leyendo microfono ({consecutive_errors}): {e}")
+                time.sleep(0.1)
+                if consecutive_errors >= 3:
+                    try:
+                        logger.info("Intentando recuperar conexion con el microfono...")
+                        if self._stream_in:
+                            try:
+                                self._stream_in.stop_stream()
+                                self._stream_in.close()
+                            except Exception:
+                                pass
+                        self._stream_in = self._pa.open(
+                            format=FORMAT, channels=CHANNELS, rate=RATE_IN,
+                            input=True, frames_per_buffer=CHUNK
+                        )
+                        consecutive_errors = 0
+                        logger.info("Microfono reconectado con exito.")
+                        continue
+                    except Exception as re_err:
+                        logger.error(f"Fallo al reconectar microfono: {re_err}")
+                        time.sleep(0.5)
+                        if consecutive_errors >= 12:
+                            self._loop.call_soon_threadsafe(
+                                self._emit, {"estado": "error", "detalle": f"microfono desconectado: {e}"})
+                            break
+                        continue
             rms = _rms(data)
             if rms > 250 and time.monotonic() - last_log > 1.0:
                 logger.debug(f"Audio captado (volumen {rms})")
@@ -353,7 +378,20 @@ REGLAS GENERALES (valen siempre):
             try:
                 await asyncio.to_thread(self._stream_out.write, data)
             except Exception as e:
-                logger.error(f"Error reproduciendo audio: {e}")
+                logger.warning(f"Error reproduciendo audio: {e}")
+                try:
+                    if self._stream_out:
+                        try:
+                            self._stream_out.stop_stream()
+                            self._stream_out.close()
+                        except Exception:
+                            pass
+                    self._stream_out = self._pa.open(
+                        format=FORMAT, channels=CHANNELS, rate=RATE_OUT,
+                        output=True, frames_per_buffer=CHUNK
+                    )
+                except Exception as re_out:
+                    logger.error(f"Fallo al recuperar altavoz: {re_out}")
             self._mute_until = time.monotonic() + 0.5
 
     # ---------------------------------------------------------------- sesion
