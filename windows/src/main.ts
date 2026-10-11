@@ -129,6 +129,7 @@ async function main() {
       } else if (state === "dormido") {
         State.voiceStatus = "Esperando tu voz...";
         island.engine.setState("idle");
+        island.engine.triggerEmote("wink", 0.8);
       } else if (state === "error") {
         State.voiceStatus = `Error: ${extra || "desconocido"}`;
         island.engine.setState("error");
