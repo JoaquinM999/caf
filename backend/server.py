@@ -1,6 +1,18 @@
 import asyncio
 import json
 import logging
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 

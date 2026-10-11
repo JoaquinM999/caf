@@ -37,6 +37,7 @@ pub fn start(app: &AppHandle) {
         if let Some(key) = crate::secrets::get("caf-api-key").or_else(|| crate::secrets::get("google-api-key")) {
             cmd.env("GEMINI_API_KEY", key);
         }
+        cmd.env("PYTHONUNBUFFERED", "1");
 
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
