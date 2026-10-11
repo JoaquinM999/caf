@@ -254,6 +254,11 @@ body {
   display: grid;
   place-items: center;
   cursor: default;
+  transition: color 120ms ease;
+}
+
+.header-actions button:hover {
+  color: var(--ink);
 }
 
 .header-actions button.on {

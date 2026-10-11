@@ -160,6 +160,7 @@ export class Island {
       setView: (v) => this.setView(v),
       cancelDrop: () => this.discardDrop(),
       collapse: () => this.collapse(),
+      hide: () => this.hideIsland(),
       foldApproval: () => this.foldApproval(),
       setFocus: (id) => {
         State.setFocus(id);
@@ -351,12 +352,16 @@ export class Island {
     const prev = State.mode;
     if (mode === prev) return;
     State.mode = mode;
-    if (mode === "expanded") Sound.play("open");
+    if (mode === "expanded") {
+      Sound.play("open");
+      void Bridge.setAlwaysOnTop(true);
+    }
     if (prev === "expanded") {
       Sound.play("close");
       // A folded card is still waiting: it keeps the island pinned.
       if (!State.pendingApproval) State.isPinned = false;
       void Bridge.focusWindow(false);
+      void Bridge.setAlwaysOnTop(false);
     }
     if (mode !== "expanded") {
       closePlanCard();
@@ -420,6 +425,12 @@ export class Island {
     // back left it thinking the island was still open, and a click on the compact
     // island then did nothing — the island could never be reopened.
     this.fsm.forcePetit();
+  }
+
+  hideIsland() {
+    State.isPinned = false;
+    this.fsm.pinned = false;
+    this.fsm.forceHidden();
   }
 
   /** Alert from the hook server: open on this view. Pinned alerts never auto-close. */

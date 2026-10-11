@@ -173,6 +173,13 @@ fn focus_window(app: AppHandle, focused: bool) {
 }
 
 #[tauri::command]
+fn set_always_on_top(app: AppHandle, on_top: bool) {
+    if let Some(win) = island::window(&app) {
+        let _ = win.set_always_on_top(on_top);
+    }
+}
+
+#[tauri::command]
 fn reposition(app: AppHandle, shared: State<Shared>) {
     let pref = shared.settings.lock().unwrap().screen.clone();
     let collapsed = shared.gate.collapsed.load(Ordering::Relaxed);
@@ -673,6 +680,7 @@ pub fn run() {
             set_system_languages,
             set_collapsed,
             set_island_rect,
+            set_always_on_top,
             focus_window,
             reposition,
             list_monitors,

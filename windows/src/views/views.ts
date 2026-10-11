@@ -32,6 +32,8 @@ export interface ViewActions {
   /** "Cancel" on a dropped file: forgets it and goes back home. */
   cancelDrop(): void;
   collapse(): void;
+  /** Hides the island completely down to the background wake strip. */
+  hide(): void;
   /** Folds a waiting card to the compact island without answering it. */
   foldApproval(): void;
   setFocus(id: string): void;
@@ -123,6 +125,8 @@ export function buildHeader(actions: ViewActions): ViewHost {
   }, svg(ICONS.mic, 14));
   const gearBtn = h("button", { title: tl("Settings"), onclick: () => go("settings") }, svg(ICONS.gear, 14));
   const soundBtn = h("button", { title: tl("Mute"), onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
+  const minBtn = h("button", { title: tl("Minimize"), onclick: () => { actions.blip(); actions.collapse(); } }, svg(ICONS.minus, 13));
+  const closeBtn = h("button", { title: tl("Close"), onclick: () => { actions.blip(); actions.hide(); } }, svg(ICONS.xmark, 13));
   // Plan usage pills (off by default): before the gear, Claude first, as on the Mac.
   const claudePill = buildPlanPill(false);
   const codexPill = buildPlanPill(true);
@@ -138,7 +142,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    h("div", { class: "header-actions" }, planPills, micBtn, gearBtn, soundBtn),
+    h("div", { class: "header-actions" }, planPills, micBtn, gearBtn, soundBtn, minBtn, closeBtn),
   );
   const headerActions = el.lastElementChild as HTMLElement;
 
