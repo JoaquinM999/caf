@@ -65,6 +65,14 @@ TOOLS = {
         desc="Busca en YouTube y reproduce el primer resultado (cancion, video, tutorial, etc.).",
         params={"consulta": "Que buscar en YouTube"},
         required=["consulta"], fn=caf_tools.youtube_reproducir),
+    "buscar_web": dict(
+        desc="Busca en internet y devuelve los primeros resultados (titulo, resumen y direccion).",
+        params={"consulta": "Que buscar"},
+        required=["consulta"], fn=caf_tools.buscar_web),
+    "leer_pagina": dict(
+        desc="Lee el texto de una pagina web (http/https) para resumirla o sacar datos.",
+        params={"url": "Direccion completa de la pagina"},
+        required=["url"], fn=caf_tools.leer_pagina),
     "abrir_url": dict(
         desc="Abre una pagina web (http o https) en el navegador.",
         params={"url": "Direccion completa, ej. https://es.wikipedia.org"},
@@ -233,6 +241,11 @@ class CafEngine:
                 logger.warning(f"Herramienta '{name}' del perfil no existe, se ignora.")
                 continue
             decl = dict(name=name, description=spec["desc"])
+            if name == "abrir_programa":  # que el modelo sepa EXACTAMENTE cuales puede abrir
+                try:
+                    decl["description"] += " Programas disponibles: " + ", ".join(sorted(caf_tools.load_whitelist())) + "."
+                except Exception:
+                    pass
             if spec["params"]:
                 decl["parameters"] = types.Schema(
                     type="OBJECT",
@@ -254,7 +267,7 @@ REGLAS GENERALES (valen siempre):
 - Si el usuario te llama por tu nombre ("Caf") sin pedir nada más, contestá solamente: "Sí, decime qué necesitás." y esperá.
 - Llamá a la herramienta desactivar_asistente SOLO si el usuario pide explícitamente que te desactives, te duermas o se despide ("ya podés desactivarte", "chau Caf", "dormí", "hasta luego"). Un simple "gracias" NO es una despedida: contestá brevemente y seguí atento. Al desactivarte, despedite con una frase muy corta.
 - El usuario a veces piensa en voz alta: dice "eh...", hace pausas largas o deja frases sin terminar. Esperá en silencio y respondé recién cuando quede claro que terminó su pedido. Si dice "esperá" o "me quedé pensando", esperá hasta que retome.
-- Si te piden información actual (noticias, datos, precios, clima, resultados), buscala en internet y respondé con un resumen corto.
+- Si te piden información actual (noticias, datos, precios, clima, resultados), usá buscar_web (y leer_pagina si hace falta más detalle) y respondé con un resumen corto.
 - Respondé de manera natural y conversacional a lo que escuches."""
         kwargs = dict(
             response_modalities=["AUDIO"],

@@ -2,3 +2,9 @@ programas:
   bloc de notas: notepad.exe
   calculadora: calc.exe
   spotify: explorer.exe shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify
+  chrome: Start-Process chrome
+  google chrome: Start-Process chrome
+  navegador: Start-Process chrome
+  edge: Start-Process msedge
+  explorador de archivos: explorer.exe
+  administrador de tareas: taskmgr.exe

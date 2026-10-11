@@ -23,3 +23,7 @@ _prive/
 .env
 Caf/.env
 backend/.env
+__pycache__/
+*.pyc
+windows/all_models.txt
+windows/models.json
