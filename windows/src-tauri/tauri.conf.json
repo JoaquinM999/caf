@@ -41,14 +41,20 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": { "../target/release/coucou-hook.exe": "coucou-hook.exe" },
+    "externalBin": [
+      "binaries/coucou-backend"
+    ],
+    "resources": {
+      "../target/release/coucou-hook.exe": "coucou-hook.exe",
+      "../../Caf/modelo_vosk": "modelo_vosk"
+    },
     "copyright": "© Louis Raille",
     "category": "DeveloperTool",
     "shortDescription": "Mochi lives at the top of your screen",

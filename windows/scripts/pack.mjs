@@ -66,8 +66,8 @@ const written = [];
 for (const { dir, suffix, names } of packages) {
   const built = newest(join(bundleRoot, dir), suffix);
   if (!built) {
-    console.error(`No *${suffix} in ${join(bundleRoot, dir)} — run \`npm run tauri build\` first.`);
-    process.exit(1);
+    console.log(`Skipping ${dir} (no *${suffix} found in ${join(bundleRoot, dir)})`);
+    continue;
   }
   for (const name of names) {
     const dest = join(outDir, name);

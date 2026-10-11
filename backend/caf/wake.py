@@ -16,9 +16,20 @@ DEFAULT_WORDS = ("caf,cap,caz,gap,kaf,kav,caff,cif,gas,cat,calf,cafe,café,cash,
 
 
 def find_model_path():
+    import sys
     env = os.getenv("CAF_VOSK_MODEL")
     if env and Path(env).exists():
         return Path(env)
+    # Check near executable (for frozen PyInstaller bundle)
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        for rel in ("modelo_vosk", "Caf/modelo_vosk", "model", "resources/modelo_vosk"):
+            if (exe_dir / rel).exists():
+                return exe_dir / rel
+    # Check cwd
+    for rel in ("modelo_vosk", "Caf/modelo_vosk", "model"):
+        if (Path.cwd() / rel).exists():
+            return Path.cwd() / rel
     here = Path(__file__).resolve()
     for base in (here.parents[1], here.parents[2], here.parents[3] if len(here.parents) > 3 else here.parents[2]):
         for rel in ("modelo_vosk", "Caf/modelo_vosk", "model", "vosk-model-small-es"):

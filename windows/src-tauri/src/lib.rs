@@ -2,6 +2,7 @@
 
 mod agent_hooks;
 mod agents;
+mod backend;
 mod chat;
 mod claude;
 mod codex_plan;
@@ -785,10 +786,16 @@ pub fn run() {
             integrations::start(handle.clone());
             spotify::sync(&handle, &loaded.active_integrations);
             shortcuts::apply(&handle, &loaded.shortcuts);
+            backend::start(&handle);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Coucou");
+        .build(tauri::generate_context!())
+        .expect("error while running Coucou")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                backend::stop();
+            }
+        });
 }
 
 #[cfg(test)]
