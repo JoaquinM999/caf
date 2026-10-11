@@ -151,14 +151,34 @@ def _enviar_tecla_media(vk_code: int):
         ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
 
 
+def _asegurar_spotify_abierto():
+    """Verifica si Spotify está abierto; si no, lo inicia de forma gráfica."""
+    if sys.platform != "win32":
+        return
+    import psutil
+    import time
+    is_running = any("spot" in (p.info["name"] or "").lower() for p in psutil.process_iter(["name"]))
+    if not is_running:
+        try:
+            subprocess.run([
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "Start-Process 'shell:AppsFolder\\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify'"
+            ], timeout=10)
+            time.sleep(2.0)
+        except Exception:
+            pass
+
+
 def spotify_reproducir(consulta: str) -> str:
-    """Reproduce una canción en Spotify.
-    Si SPOTIPY está configurado usa la API oficial; si no, automatiza la apertura y reproducción nativa en Windows."""
+    """Reproduce una canción en Spotify abriendo la aplicación de forma visible en pantalla."""
     consulta = (consulta or "").strip()
     if not consulta:
         return "Error: falta el texto a buscar."
 
-    # 1. Si el usuario configuró API de Spotify (con cuenta Premium)
+    # 1. Asegurar que Spotify esté abierto de forma visible
+    _asegurar_spotify_abierto()
+
+    # 2. Si el usuario configuró API de Spotify (con cuenta Premium)
     if os.getenv("SPOTIPY_CLIENT_ID") and os.getenv("SPOTIPY_CLIENT_SECRET"):
         try:
             sp = _spotify_client()
@@ -172,26 +192,32 @@ def spotify_reproducir(consulta: str) -> str:
                     artistas = ", ".join(a["name"] for a in track["artists"])
                     return f"Éxito: reproduciendo '{track['name']}' de {artistas} en Spotify."
         except Exception:
-            pass  # Fallback a reproducción nativa directa en Windows
+            pass  # Fallback a apertura visible directa en Windows
 
-    # 2. Vía nativa directa de Windows con Track ID
+    # 3. Vía visible directa de Windows con Track ID (sin :play para que la ventana se vea en pantalla)
     track_id, titulo = _buscar_track_spotify(consulta)
     if track_id:
-        uri = f"spotify:track:{track_id}:play"
+        uri = f"spotify:track:{track_id}"
         try:
             if sys.platform == "win32":
+                import time
                 os.startfile(uri)
+                time.sleep(1.0)
+                _enviar_tecla_media(0xB3)  # Play
             else:
                 subprocess.run(["xdg-open", uri], timeout=10)
-            return f"Éxito: reproduciendo '{titulo or consulta}' en Spotify."
+            return f"Éxito: abrí y puse '{titulo or consulta}' en Spotify."
         except Exception as e:
             return f"Error al abrir Spotify: {e}"
 
-    # 3. Fallback: buscar en la app
+    # 4. Fallback: buscar en la app
     uri = "spotify:search:" + quote(consulta)
     try:
         if sys.platform == "win32":
+            import time
             os.startfile(uri)
+            time.sleep(1.0)
+            _enviar_tecla_media(0xB3)
         else:
             subprocess.run(["xdg-open", uri], timeout=10)
         return f"Éxito: abrí '{consulta}' en Spotify."
