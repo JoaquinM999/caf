@@ -35,4 +35,7 @@ NotchBuddy/Sources/App/Voice/GitHash.generated.swift
 windows/src-tauri/binaries/
 backend/build/
 backend/dist/
+build/
 *.spec
+*.mp4
+
