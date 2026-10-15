@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import yaml
 import subprocess
@@ -102,7 +103,7 @@ def abrir_programa(nombre: str) -> str:
         try:
             subprocess.Popen(cmd, shell=True)
             return f"Éxito: abrí {nombre_limpio}."
-        except Exception as e:
+        except Exception:
             pass
 
     # 2. Accesos directos (.lnk) de Windows en menú inicio o escritorio
@@ -458,7 +459,7 @@ def listar_archivos(ruta_relativa: str = ".") -> str:
         items = os.listdir(target)
         if not items:
             return "La carpeta está vacía."
-        return "\\n".join(items)
+        return "\n".join(items)
     except Exception as e:
         return f"Error al listar archivos: {str(e)}"
 
@@ -471,7 +472,7 @@ def generar_reporte(titulo: str, contenido_markdown: str, formato: str = "md") -
         filename = f"{safe_title}.{formato}"
         target = _safe_resolve(filename)
         with open(target, "w", encoding="utf-8") as f:
-            f.write(f"# {titulo}\\n\\n{contenido_markdown}")
+            f.write(f"# {titulo}\n\n{contenido_markdown}")
         return f"Reporte generado exitosamente como '{filename}' en la carpeta de trabajo."
     except Exception as e:
         return f"Error al generar reporte: {str(e)}"
