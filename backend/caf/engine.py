@@ -37,8 +37,8 @@ TOOL_TIMEOUT = 20  # segundos
 # nombre -> descripcion, parametros (todos STRING), requeridos, funcion
 TOOLS = {
     "abrir_programa": dict(
-        desc="Abre un programa de la PC. Solo funciona con los de la lista blanca.",
-        params={"nombre": "Nombre del programa, ej. 'calculadora'"},
+        desc="Abre cualquier programa, aplicación o juego instalado en la PC (ej. Chrome, Spotify, Discord, VS Code, Steam, Calculadora, Photoshop, Bloc de notas, etc.).",
+        params={"nombre": "Nombre del programa o aplicación a abrir"},
         required=["nombre"], fn=caf_tools.abrir_programa),
     "crear_archivo": dict(
         desc="Crea un archivo de texto en la carpeta de trabajo.",
@@ -74,9 +74,20 @@ TOOLS = {
         params={},
         required=[], fn=caf_tools.spotify_anterior),
     "youtube_reproducir": dict(
-        desc="Busca en YouTube y reproduce el primer resultado (cancion, video, tutorial, etc.).",
-        params={"consulta": "Que buscar en YouTube"},
+        desc="Busca en YouTube y reproduce el primer resultado. Si piden el 'último video' o el más reciente, busca automáticamente el más recientemente subido.",
+        params={"consulta": "Qué buscar o canal/artista"},
         required=["consulta"], fn=caf_tools.youtube_reproducir),
+    "recordar": dict(
+        desc="Guarda una instrucción, dato o preferencia en la memoria permanente de Caf para recordarla siempre (ej. 'siempre que pida el último video buscar por fecha de subida', 'mi nombre es Joaquín').",
+        params={"recuerdo": "La instrucción, dato o preferencia a recordar para siempre"},
+        required=["recuerdo"], fn=caf_tools.recordar),
+    "listar_recuerdos": dict(
+        desc="Muestra lo que Caf tiene guardado en su memoria persistente.",
+        params={}, required=[], fn=caf_tools.listar_recuerdos),
+    "olvidar": dict(
+        desc="Elimina un dato de la memoria permanente de Caf si el usuario lo pide.",
+        params={"recuerdo": "Texto o tema a olvidar"},
+        required=["recuerdo"], fn=caf_tools.olvidar),
     "buscar_web": dict(
         desc="Busca en internet y devuelve los primeros resultados (titulo, resumen y direccion).",
         params={"consulta": "Que buscar"},
@@ -117,7 +128,7 @@ class NoiseGate:
     detector de voz del servidor ve silencio limpio y cierra bien los turnos.
     """
 
-    def __init__(self, min_open=120, ratio=4.0, hang_ms=700, preroll=4, open_after=2):
+    def __init__(self, min_open=70, ratio=2.5, hang_ms=750, preroll=6, open_after=1):
         self.min_open = min_open
         self.ratio = ratio
         self.hang_chunks = max(1, int(hang_ms / (1000 * CHUNK / RATE_IN)))
@@ -249,8 +260,12 @@ class CafEngine:
         self._mute_until = 0.0
 
         # Filtrado de ruido y push-to-talk (ver README en los comentarios de abajo)
-        self.gate = NoiseGate(min_open=int(os.getenv("CAF_GATE_MIN", "120"))) \
-            if os.getenv("CAF_GATE", "1") == "1" else None
+        self.gate = NoiseGate(
+            min_open=int(os.getenv("CAF_GATE_MIN", "70")),
+            ratio=float(os.getenv("CAF_GATE_RATIO", "2.5")),
+            open_after=int(os.getenv("CAF_GATE_HITS", "1")),
+            preroll=int(os.getenv("CAF_GATE_PREROLL", "6")),
+        ) if os.getenv("CAF_GATE", "1") == "1" else None
         self.ptt_enabled = os.getenv("CAF_PTT", "0") == "1"
         self.muted = False
         self._ptt_down = False
@@ -304,11 +319,6 @@ class CafEngine:
                 logger.warning(f"Herramienta '{name}' del perfil no existe, se ignora.")
                 continue
             decl = dict(name=name, description=spec["desc"])
-            if name == "abrir_programa":  # que el modelo sepa EXACTAMENTE cuales puede abrir
-                try:
-                    decl["description"] += " Programas disponibles: " + ", ".join(sorted(caf_tools.load_whitelist())) + "."
-                except Exception:
-                    pass
             if spec["params"]:
                 decl["parameters"] = types.Schema(
                     type="OBJECT",
@@ -324,14 +334,17 @@ class CafEngine:
         return tools or None
 
     def _build_config(self):
+        from caf.memory import obtener_prompt_memoria
         prompt = self.profile.system_instruction + """
 
 REGLAS GENERALES (valen siempre):
-- Si el usuario te llama por tu nombre ("Caf") sin pedir nada más, contestá solamente: "Sí, decime qué necesitás." y esperá.
-- Llamá a la herramienta desactivar_asistente SOLO si el usuario pide explícitamente que te desactives, te duermas o se despide ("ya podés desactivarte", "chau Caf", "dormí", "hasta luego"). Un simple "gracias" NO es una despedida: contestá brevemente y seguí atento. Al desactivarte, despedite con una frase muy corta.
-- El usuario a veces piensa en voz alta: dice "eh...", hace pausas largas o deja frases sin terminar. Esperá en silencio y respondé recién cuando quede claro que terminó su pedido. Si dice "esperá" o "me quedé pensando", esperá hasta que retome.
+- Si el usuario te llama por tu nombre ("Caf") sin pedir nada más, contestá solamente: "Sí, decime qué necesitás." y esperá atentamente.
+- Llamá a la herramienta desactivar_asistente SOLO si el usuario pide explícitamente que te desactives, te duermas o se despide ("ya podés desactivarte", "chau Caf", "dormí", "hasta luego"). Un simple "gracias" NO es una despedida: contestá brevemente con amabilidad ("De nada", "A la orden") y seguí atento. Jamás digas cosas como "en ningún momento te llamé" ni te disculpes innecesariamente.
+- Si te piden reproducir música o abrir una canción (ej. en Spotify o YouTube), ejecutá la herramienta inmediatamente y confirmá de manera breve y positiva ("Dale, te pongo [canción]").
+- Si el usuario te pide que recuerdes algo ("recordá que...", "acordate de...", "guardá en tu memoria...", "de ahora en adelante siempre..."), ejecutá la herramienta 'recordar' inmediatamente para guardarlo en tu memoria persistente.
+- El usuario a veces piensa en voz alta: dice "eh...", hace pausas o deja frases a medio decir. Esperá pacientemente a que termine su pedido antes de interrumpir.
 - Si te piden información actual (noticias, datos, precios, clima, resultados), usá buscar_web (y leer_pagina si hace falta más detalle) y respondé con un resumen corto.
-- Respondé de manera natural y conversacional a lo que escuches."""
+- Respondé de manera natural, concisa y conversacional a lo que escuches.""" + obtener_prompt_memoria()
         kwargs = dict(
             response_modalities=["AUDIO"],
             system_instruction=types.Content(parts=[types.Part(text=prompt)]),

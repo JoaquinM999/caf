@@ -355,9 +355,10 @@ export class Island {
     if (mode === "expanded") {
       Sound.play("open");
       void Bridge.setAlwaysOnTop(true);
-    }
-    if (prev === "expanded") {
-      Sound.play("close");
+    } else {
+      if (prev === "expanded") {
+        Sound.play("close");
+      }
       // Only unpin when moving to hidden or if not explicitly pinned
       if (mode === "hidden") {
         State.isPinned = false;
@@ -1093,15 +1094,10 @@ export class Island {
         this.engine.slotHVel = 0;
       }
     }
-    // Only the main Mochi is dressed — the one of the main tool's pill (Settings →
-    // Active pills): a focused integration pill shows its own colours, unless
-    // the wardrobe is open (BotCanvasView.showOutfit, macOS).
     // In the wardrobe the hovered outfit swaps in at once, without the drop-in.
     const inWardrobe = State.mode === "expanded" && State.view === "wardrobe";
-    const mainFocused = State.focusId == null || State.focusId === State.mainPillId;
-    const showOutfit = mainFocused || State.mode !== "expanded" || inWardrobe;
     const outfit = State.wardrobePreview ?? this.seasons.get(parseOutfit(State.settings.mochiOutfit));
-    this.engine.setOutfit(showOutfit ? outfit : "none", !inWardrobe);
+    this.engine.setOutfit(outfit, !inWardrobe);
     // Dances while music plays: always in the compact island, expanded only on
     // the music pill's card (BotCanvasView, macOS). Asked every frame.
     this.engine.setDancing(islandDances({

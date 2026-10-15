@@ -188,7 +188,7 @@ fn focus_window(app: AppHandle, focused: bool) {
 #[tauri::command]
 fn set_always_on_top(app: AppHandle, on_top: bool) {
     if let Some(win) = island::window(&app) {
-        let _ = win.set_always_on_top(on_top);
+        platform::set_island_always_on_top(&win, on_top);
     }
 }
 
@@ -808,6 +808,7 @@ pub fn run() {
                 #[cfg(windows)]
                 webview_drop::install(&handle);
                 island::apply_geometry(&handle, &loaded.screen, false);
+                platform::set_island_always_on_top(&win, false);
                 let _ = win.show();
             }
             gate.collapsed.store(false, Ordering::Relaxed);

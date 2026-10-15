@@ -8,56 +8,126 @@ from urllib.parse import quote, urlparse
 
 # Configuración de carpeta segura
 WORKSPACE_DIR = Path.home() / "CafWorkspace"
-WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-
-def load_whitelist():
-    if not CONFIG_PATH.exists():
-        # Crear config por defecto
-        default_config = {
-            "programas": {
-                "spotify": "explorer.exe shell:AppsFolder\\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify",
-                "bloc de notas": "notepad.exe",
-                "calculadora": "calc.exe"
-            }
-        }
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.dump(default_config, f)
-        return default_config["programas"]
-        
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-        return config.get("programas", {})
 
 def _safe_resolve(relative_path: str) -> Path:
     """Resuelve la ruta relativa y asegura que esté dentro de WORKSPACE_DIR."""
-    # Convertir a Path y resolver
     target = (WORKSPACE_DIR / relative_path).resolve()
-    # Comprobar que WORKSPACE_DIR sea un padre estricto o el mismo
     try:
         target.relative_to(WORKSPACE_DIR.resolve())
     except ValueError:
         raise ValueError(f"Acceso denegado: {relative_path} está fuera de la carpeta de trabajo.")
     return target
 
+
+COMMON_PROGRAM_ALIASES = {
+    "spotify": "explorer.exe shell:AppsFolder\\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify",
+    "chrome": "chrome.exe",
+    "google chrome": "chrome.exe",
+    "brave": "brave.exe",
+    "edge": "msedge.exe",
+    "microsoft edge": "msedge.exe",
+    "firefox": "firefox.exe",
+    "calculadora": "calc.exe",
+    "calc": "calc.exe",
+    "bloc de notas": "notepad.exe",
+    "notepad": "notepad.exe",
+    "explorador de archivos": "explorer.exe",
+    "explorador": "explorer.exe",
+    "archivos": "explorer.exe",
+    "discord": "discord.exe",
+    "steam": "steam.exe",
+    "vscode": "code.cmd",
+    "visual studio code": "code.cmd",
+    "code": "code.cmd",
+    "antigravity": "antigravity.exe",
+    "terminal": "wt.exe",
+    "cmd": "cmd.exe",
+    "simbolo del sistema": "cmd.exe",
+    "powershell": "powershell.exe",
+    "administrador de tareas": "taskmgr.exe",
+    "paint": "mspaint.exe",
+    "word": "winword.exe",
+    "excel": "excel.exe",
+    "powerpoint": "powerpnt.exe",
+    "whatsapp": "explorer.exe shell:AppsFolder\\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App",
+    "telegram": "telegram.exe",
+    "obs": "obs64.exe",
+    "obs studio": "obs64.exe",
+    "vlc": "vlc.exe",
+    "configuracion": "explorer.exe ms-settings:",
+    "ajustes": "explorer.exe ms-settings:",
+}
+
+def load_whitelist():
+    """Mantiene compatibilidad retrospectiva con configs viejas."""
+    return list(COMMON_PROGRAM_ALIASES.keys())
+
+def _buscar_acceso_directo(nombre: str) -> Path | None:
+    """Busca un acceso directo (.lnk) en el menú de inicio y escritorio de Windows."""
+    dirs = [
+        Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(os.environ.get("ProgramData", "")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(os.environ.get("USERPROFILE", "")) / "Desktop",
+        Path(os.environ.get("PUBLIC", "")) / "Desktop",
+    ]
+    norm = nombre.lower().strip()
+    candidates = []
+    for d in dirs:
+        if d.exists():
+            for f in d.rglob("*.lnk"):
+                base = f.stem.lower()
+                if norm == base:
+                    return f
+                if norm in base:
+                    candidates.append((len(base), f))
+    if candidates:
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
+    return None
+
 def abrir_programa(nombre: str) -> str:
-    """Abre un programa según la lista blanca. Retorna el resultado."""
-    whitelist = load_whitelist()
-    nombre = nombre.lower()
-    
-    if nombre not in whitelist:
-        return f"Error: El programa '{nombre}' no está en la lista blanca de permitidos."
-        
-    comando = whitelist[nombre]
+    """Abre cualquier programa, aplicación o juego instalado en la PC."""
+    nombre_limpio = (nombre or "").lower().strip()
+    for prefijo in ("abrir ", "ejecutar ", "iniciar ", "el programa ", "la app ", "la aplicación ", "la aplicacion "):
+        if nombre_limpio.startswith(prefijo):
+            nombre_limpio = nombre_limpio[len(prefijo):].strip()
+            
+    if not nombre_limpio:
+        return "Error: no se especificó qué programa abrir."
+
+    # 1. Alias conocidos
+    if nombre_limpio in COMMON_PROGRAM_ALIASES:
+        cmd = COMMON_PROGRAM_ALIASES[nombre_limpio]
+        try:
+            subprocess.Popen(cmd, shell=True)
+            return f"Éxito: abrí {nombre_limpio}."
+        except Exception as e:
+            pass
+
+    # 2. Accesos directos (.lnk) de Windows en menú inicio o escritorio
+    lnk = _buscar_acceso_directo(nombre_limpio)
+    if lnk:
+        try:
+            os.startfile(str(lnk))
+            return f"Éxito: abrí {lnk.stem}."
+        except Exception:
+            pass
+
+    # 3. Intentos de ejecución directa en Windows
     try:
-        # En Windows shell=False es más seguro. Si usa explorer.exe, necesitamos dividir los argumentos.
-        # Por simplicidad usamos powershell de forma segura sin interpolación.
-        result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", comando], 
-                                capture_output=True, text=True, timeout=10)
-        return f"Éxito: {nombre} ejecutado." if result.returncode == 0 else f"Error al ejecutar: {result.stderr.strip()}"
-    except Exception as e:
-        return f"Excepción al ejecutar {nombre}: {str(e)}"
+        os.startfile(nombre_limpio)
+        return f"Éxito: abrí {nombre_limpio}."
+    except Exception:
+        try:
+            os.startfile(f"{nombre_limpio}.exe")
+            return f"Éxito: abrí {nombre_limpio}."
+        except Exception:
+            try:
+                subprocess.Popen(f'start "" "{nombre_limpio}"', shell=True)
+                return f"Éxito: mandé a abrir {nombre_limpio}."
+            except Exception as e:
+                return f"No pude encontrar ni abrir el programa '{nombre}': {e}"
 
 def spotify_buscar(consulta: str) -> str:
     """Abre Spotify en los resultados de busqueda de `consulta` (no reproduce sola)."""
@@ -88,7 +158,10 @@ def abrir_url(url: str) -> str:
 
 
 def youtube_reproducir(consulta: str) -> str:
-    """Busca `consulta` en YouTube y abre el primer resultado (empieza a reproducirse)."""
+    """Busca en YouTube y reproduce el primer resultado. Si se pide el 'último video', busca el más recientemente subido por fecha."""
+    import re
+    from urllib.parse import quote_plus
+    
     consulta = (consulta or "").strip()
     if not consulta:
         return "Error: falta qué buscar."
@@ -96,19 +169,61 @@ def youtube_reproducir(consulta: str) -> str:
         import yt_dlp
     except ImportError:
         return "Error: falta instalar yt-dlp (pip install yt-dlp)."
+
+    c_lower = consulta.lower()
+    es_ultimo = any(w in c_lower for w in ["ultimo", "último", "reciente", "recientes", "latest", "nuevo", "nuevos"])
+    
+    clean = re.sub(r'(?i)\b(el\s+)?(último|ultimo|mas\s+reciente|más\s+reciente|nuevo|lo\s+nuevo|lo\s+ultimo|lo\s+último)\s+(video\s+)?(subido\s+)?(de|del)?\b', '', consulta).strip()
+    clean = re.sub(r'(?i)\b(video|subido|hoy)\b', '', clean).strip()
+    if not clean:
+        clean = consulta
+
     try:
-        opts = {"quiet": True, "no_warnings": True, "skip_download": True,
-                "extract_flat": "in_playlist", "socket_timeout": 10}
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extract_flat": True,
+            "playlist_items": "1-3",
+            "socket_timeout": 10,
+        }
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{consulta}", download=False)
+            if es_ultimo:
+                # sp=CAI%253D en YouTube Search ordena estrictamente por fecha de subida (Upload date)
+                url = f"https://www.youtube.com/results?search_query={quote_plus(clean)}&sp=CAI%253D"
+                info = ydl.extract_info(url, download=False)
+            else:
+                info = ydl.extract_info(f"ytsearch1:{consulta}", download=False)
+
         entries = [e for e in (info or {}).get("entries") or [] if e and e.get("id")]
         if not entries:
             return f"Error: no encontré resultados en YouTube para '{consulta}'."
         video = entries[0]
-        webbrowser.open(f"https://www.youtube.com/watch?v={video['id']}", new=2)
-        return f"Éxito: abrí en YouTube '{video.get('title', consulta)}'."
+        video_url = f"https://www.youtube.com/watch?v={video['id']}"
+        webbrowser.open(video_url, new=2)
+        tipo = "el último video subido" if es_ultimo else "video"
+        return f"Éxito: abrí en YouTube {tipo} de '{clean}': '{video.get('title', clean)}'."
     except Exception as e:
         return f"Error al buscar en YouTube: {e}"
+
+
+def recordar(recuerdo: str) -> str:
+    """Guarda una instrucción, dato o preferencia en la memoria permanente de Caf."""
+    from caf.memory import guardar_recuerdo
+    return guardar_recuerdo(recuerdo)
+
+
+def olvidar(recuerdo: str) -> str:
+    """Olvida una instrucción o dato de la memoria permanente de Caf."""
+    from caf.memory import olvidar_recuerdo
+    return olvidar_recuerdo(recuerdo)
+
+
+def listar_recuerdos() -> str:
+    """Lista lo que Caf recuerda del usuario."""
+    from caf.memory import listar_recuerdos as _listar
+    return _listar()
+
 
 
 def _spotify_client():

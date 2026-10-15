@@ -544,8 +544,10 @@ pub fn set_activating(win: &WebviewWindow, activating: bool) {
         let mode = if activating { layer::KEYBOARD_ON_DEMAND } else { layer::KEYBOARD_NONE };
         unsafe { layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(&gw), mode) };
     }
+}
 
-    pub fn send_to_back(_win: &WebviewWindow) {}
+pub fn set_island_always_on_top(win: &WebviewWindow, on_top: bool) {
+    let _ = win.set_always_on_top(on_top);
 }
 
 /// Only this rectangle (window-logical pixels) takes the mouse; `None` means
