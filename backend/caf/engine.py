@@ -261,9 +261,9 @@ class CafEngine:
 
         # Filtrado de ruido y push-to-talk (ver README en los comentarios de abajo)
         self.gate = NoiseGate(
-            min_open=int(os.getenv("CAF_GATE_MIN", "70")),
+            min_open=int(os.getenv("CAF_GATE_MIN", "80")),
             ratio=float(os.getenv("CAF_GATE_RATIO", "2.5")),
-            open_after=int(os.getenv("CAF_GATE_HITS", "1")),
+            open_after=int(os.getenv("CAF_GATE_HITS", "2")),
             preroll=int(os.getenv("CAF_GATE_PREROLL", "6")),
         ) if os.getenv("CAF_GATE", "1") == "1" else None
         self.ptt_enabled = os.getenv("CAF_PTT", "0") == "1"
@@ -276,8 +276,9 @@ class CafEngine:
         # Modo espera con palabra de activacion local ("Caf"). Si falta Vosk o el modelo, queda siempre activo.
         self.wake = None
         self.wake_enabled = False
-        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "60"))
-        self._preroll = deque(maxlen=int(2.5 * RATE_IN / CHUNK))  # ~2,5 s de audio previo a la activacion
+        # 8 segundos de inactividad para volver a dormir (evita quedarse escuchando charlas en la habitacion)
+        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "8"))
+        self._preroll = deque(maxlen=int(0.8 * RATE_IN / CHUNK))  # ~0.8 s de audio previo a la activacion
         self._last_activity = time.monotonic()
         self._sleep_after_speech = False
         self._sleep_deadline = 0.0
@@ -344,6 +345,7 @@ REGLAS GENERALES (valen siempre):
 - Si el usuario te pide que recuerdes algo ("recordá que...", "acordate de...", "guardá en tu memoria...", "de ahora en adelante siempre..."), ejecutá la herramienta 'recordar' inmediatamente para guardarlo en tu memoria persistente.
 - El usuario a veces piensa en voz alta: dice "eh...", hace pausas o deja frases a medio decir. Esperá pacientemente a que termine su pedido antes de interrumpir.
 - Si te piden información actual (noticias, datos, precios, clima, resultados), usá buscar_web (y leer_pagina si hace falta más detalle) y respondé con un resumen corto.
+- PRIVACIDAD TOTAL Y RESPETO: Solo debés actuar si el usuario te habla DIRECTAMENTE a vos ("Caf...", "Coucou..."). Si escuchás una charla casual en la habitación entre Joako y otra persona (su hermano, amigos, etc.) o llamadas telefónicas que no sean una orden clara para vos, NUNCA ejecutes herramientas (no abras programas, no pongas música, no busques videos) y QUEDATE EN SILENCIO TOTAL.
 - Respondé de manera natural, concisa y conversacional a lo que escuches.""" + obtener_prompt_memoria()
         kwargs = dict(
             response_modalities=["AUDIO"],
@@ -433,6 +435,7 @@ REGLAS GENERALES (valen siempre):
             except asyncio.TimeoutError:
                 if self._playing and time.monotonic() > self._mute_until:
                     self._playing = False
+                    self._last_activity = time.monotonic()
                     if self._sleep_after_speech:
                         self._go_to_sleep("el asistente se despidio")  # ya se despidio
                     else:
@@ -549,8 +552,6 @@ REGLAS GENERALES (valen siempre):
             elif self.gate:
                 was_open = self.gate.open
                 chunks = self.gate.process(data)
-                if self.gate.open:
-                    self._last_activity = time.monotonic()
                 if self.gate.open != was_open:
                     logger.debug(f"gate {'ABIERTA' if self.gate.open else 'cerrada'} "
                                  f"(rms={self.gate.last_rms}, umbral={self.gate.threshold:.0f})")
