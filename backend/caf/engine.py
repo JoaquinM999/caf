@@ -276,8 +276,8 @@ class CafEngine:
         # Modo espera con palabra de activacion local ("Caf"). Si falta Vosk o el modelo, queda siempre activo.
         self.wake = None
         self.wake_enabled = False
-        # 8 segundos de inactividad para volver a dormir (evita quedarse escuchando charlas en la habitacion)
-        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "8"))
+        # 30 segundos de inactividad para volver a dormir de forma natural
+        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "30"))
         self._preroll = deque(maxlen=int(0.8 * RATE_IN / CHUNK))  # ~0.8 s de audio previo a la activacion
         self._last_activity = time.monotonic()
         self._sleep_after_speech = False

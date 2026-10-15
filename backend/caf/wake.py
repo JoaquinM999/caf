@@ -12,9 +12,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Variantes auténticas de activación para Caf.
-# NUNCA agregar palabras comunes o fragmentos monosilábicos (cap, caz, chef, gap, cif) porque
-# causan falsos positivos inmediatos al hablar en español cotidiano con otras personas en la habitación.
-DEFAULT_WORDS = "caf,cafe,cafecito,coffee"
+# NUNCA agregar palabras comunes o fragmentos monosilábicos (cap, caz, chef, gap, cif, gas, cat, caso, campo)
+# porque causan falsos positivos inmediatos al hablar en español cotidiano con otras personas.
+DEFAULT_WORDS = "caf,cafe,café,cafecito,coffee,coucou,caff,caffe,coffe"
 
 
 def find_model_path():
@@ -47,27 +47,30 @@ class WakeWord:
         self.words = {w.strip().lower() for w in (words or os.getenv("CAF_WAKE_WORDS", DEFAULT_WORDS)).split(",") if w.strip()}
         self.cooldown = cooldown
         self._last = 0.0
-        self._partial_hits = 0
 
-        # Gramática enfocada: permite únicamente las palabras reales de Caf y vocativos naturales ("hola", "che", "ey", "oye"),
-        # absorbiendo todo el resto del idioma en [unk].
-        vocab_wake = {"caf", "cafe", "cafecito", "coffee"}
-        grammar_list = sorted(vocab_wake | {"hola", "che", "ey", "oye", "[unk]"})
-        try:
-            self.rec = KaldiRecognizer(Model(str(model_path)), sample_rate, json.dumps(grammar_list))
-            logger.info(f"Palabra de activacion lista con gramatica enfocada (variantes: {sorted(self.words)})")
-        except Exception as e:
-            logger.warning(f"No se pudo inicializar con gramática ({e}), usando reconocedor abierto.")
-            self.rec = KaldiRecognizer(Model(str(model_path)), sample_rate)
-            logger.info(f"Palabra de activacion lista (variantes: {sorted(self.words)})")
+        # Usar el reconocedor abierto con el modelo completo en español.
+        # NUNCA restringir a una lista pequeña de palabras (gramática fija) porque Kaldi fuerza
+        # cualquier ruido, tos, susurro o palabra ajena (ej. "casa", "capaz", "qué tal") a colapsar
+        # en "café", provocando un bucle interminable de encendido y apagado con cualquier sonido.
+        self.rec = KaldiRecognizer(Model(str(model_path)), sample_rate)
+        logger.info(f"Palabra de activacion lista con modelo abierto (variantes: {sorted(self.words)})")
 
     def matches(self, text: str) -> bool:
-        """Verifica si el texto reconocido contiene la palabra de activación de Caf."""
-        tokens = [t for t in text.lower().split() if t != "[unk]"]
+        """'caf', 'hola caf', 'che caf, poné música' -> si. Frases largas casuales sin vocativo al inicio -> no."""
+        tokens = [t.strip(",.?!¡¿").lower() for t in text.split()]
         if not tokens:
             return False
-        # Obligatorio: debe contener una de las variantes reales de Caf
-        return any(t in self.words for t in tokens)
+
+        indices = [i for i, t in enumerate(tokens) if t in self.words]
+        if not indices:
+            return False
+
+        # Si es una frase corta (hasta 4 palabras, ej: 'caf', 'hola caf', 'caf pone musica', 'che caf'):
+        if len(tokens) <= 4:
+            return True
+
+        # Si es una frase más larga, la palabra de activación debe estar al inicio (primeras 2 palabras)
+        return any(i <= 1 for i in indices)
 
     def feed(self, data: bytes) -> bool:
         if time.monotonic() - self._last < self.cooldown:
@@ -75,9 +78,8 @@ class WakeWord:
 
         if self.rec.AcceptWaveform(data):
             text = json.loads(self.rec.Result()).get("text", "")
-            tokens = [t for t in text.lower().split() if t != "[unk]"]
-            if tokens and self.matches(" ".join(tokens)):
-                logger.info(f"¡Activación por voz confirmada! ('{' '.join(tokens)}') -> Despertando a Caf")
+            if text and self.matches(text):
+                logger.info(f"¡Activación por voz confirmada! ('{text}') -> Despertando a Caf")
                 self.rec.Reset()
                 self._last = time.monotonic()
                 return True
