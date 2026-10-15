@@ -236,10 +236,22 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   let sending = false;
   let renderedCount = -1;
+  let lastIsCaf: boolean | null = null;
   // A local model answers token by token: where its text so far is shown.
   let live: HTMLElement | null = null;
 
+  function isCafActive(): boolean {
+    return (State.focusTask?.id ?? State.focusId) === "integration_amiguito";
+  }
+
   function drawModelButton() {
+    if (isCafActive()) {
+      modelDot.style.background = "#38BDF8";
+      modelName.textContent = "Caf · Gemini Live";
+      modelBtn.classList.remove("open");
+      modelBtn.disabled = true;
+      return;
+    }
     const p = providerDef(State.settings.chatProvider);
     modelDot.style.background = p.accent;
     modelName.textContent = activeModel(State.settings) || t(STRINGS.noModel);
@@ -248,7 +260,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   }
 
   modelBtn.addEventListener("click", () => {
-    if (sending) return;
+    if (sending || isCafActive()) return;
     if (picker.isOpen) picker.close();
     else picker.open();
   });
@@ -273,6 +285,36 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     drawModelButton();
     Sound.play("send");
 
+    const isCaf = isCafActive();
+    if (isCaf) {
+      State.cafChatHistory.push({ id: nextId++, role: "user", content: query });
+      State.stateOverride = "thinking";
+      State.notify();
+      onHeightChange();
+
+      try {
+        if ((State as any).cafClient) {
+          (State as any).cafClient.sendText(query);
+        }
+        State.stateOverride = null;
+        Sound.play("finish");
+      } catch (err) {
+        State.stateOverride = null;
+        State.noteMessage = String(err).replace(/^Error:\s*/, "");
+        State.view = "note";
+        Sound.play("error");
+      } finally {
+        sending = false;
+        live = null;
+        renderedCount = -1;
+        drawModelButton();
+        State.notify();
+        onHeightChange();
+        input.focus();
+      }
+      return;
+    }
+
     State.chatHistory.push({ id: nextId++, role: "user", content: query });
     State.stateOverride = "thinking";
     State.notify();
@@ -283,12 +325,8 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
 
     try {
-      if (State.settings.chatProvider === "caf" && (State as any).cafClient) {
-        (State as any).cafClient.sendText(query);
-      } else {
-        const reply = await Bridge.chatSend(query, context);
-        State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
-      }
+      const reply = await Bridge.chatSend(query, context);
+      State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {
@@ -331,21 +369,32 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         if (wantChip) chipRow.append(contextChip(wantChip));
       }
 
+      const isCaf = isCafActive();
+      if (lastIsCaf !== isCaf) {
+        lastIsCaf = isCaf;
+        renderedCount = -1;
+      }
+      const history = isCaf ? State.cafChatHistory : State.chatHistory;
+
       const thinking = State.stateOverride === "thinking";
-      const count = State.chatHistory.length + (thinking ? 0.5 : 0);
+      const count = history.length + (thinking ? 0.5 : 0);
       if (count !== renderedCount && !live) {
         renderedCount = count;
         clear(log);
-        for (const m of State.chatHistory) log.append(bubble(m));
+        for (const m of history) log.append(bubble(m));
         if (thinking) log.append(typingDots());
         log.scrollTop = log.scrollHeight;
       }
 
       // Leaving the chat folds the picker away.
-      if (State.view !== "prompt" && picker.isOpen) picker.close();
+      if ((State.view !== "prompt" || isCaf) && picker.isOpen) picker.close();
       drawModelButton();
 
-      input.placeholder = t(State.chatHistory.length === 0 ? STRINGS.placeholderFirst : STRINGS.placeholderNext);
+      if (isCaf) {
+        input.placeholder = history.length === 0 ? "Habla o escribe con Caf..." : "Escribe algo a Caf...";
+      } else {
+        input.placeholder = t(history.length === 0 ? STRINGS.placeholderFirst : STRINGS.placeholderNext);
+      }
       input.disabled = sending;
     },
     focus() {

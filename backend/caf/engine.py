@@ -37,8 +37,8 @@ TOOL_TIMEOUT = 20  # segundos
 # nombre -> descripcion, parametros (todos STRING), requeridos, funcion
 TOOLS = {
     "abrir_programa": dict(
-        desc="Abre cualquier programa, aplicación o juego instalado en la PC (ej. Chrome, Spotify, Discord, VS Code, Steam, Calculadora, Photoshop, Bloc de notas, etc.).",
-        params={"nombre": "Nombre del programa o aplicación a abrir"},
+        desc="Abre uno o más programas, aplicaciones o juegos instalados en la PC (ej. Spotify, TradingView, Gemini, Chrome, Discord, Steam, etc.). Soporta abrir varios a la vez si se separan por coma o 'y'.",
+        params={"nombre": "Nombre del programa o lista de programas a abrir (ej. 'Spotify, TradingView y Gemini')"},
         required=["nombre"], fn=caf_tools.abrir_programa),
     "crear_archivo": dict(
         desc="Crea un archivo de texto en la carpeta de trabajo.",
@@ -244,6 +244,31 @@ class CafEngine:
         # Sin auriculares se silencia el mic para que no se escuche a si mismo.
         self.headphones = os.getenv("CAF_HEADPHONES", "0") == "1"
 
+        # Dispositivos de audio personalizados (micrófono y altavoz / auriculares)
+        self.input_device_index = None
+        self.output_device_index = None
+        dev_in = os.getenv("CAF_INPUT_DEVICE")
+        dev_out = os.getenv("CAF_OUTPUT_DEVICE")
+        if dev_in and dev_in.strip().isdigit():
+            self.input_device_index = int(dev_in.strip())
+        if dev_out and dev_out.strip().isdigit():
+            self.output_device_index = int(dev_out.strip())
+
+        try:
+            cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
+            if cfg_path.exists():
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                    audio_cfg = cfg.get("audio", {})
+                    if self.input_device_index is None and audio_cfg.get("input_device") is not None:
+                        self.input_device_index = int(audio_cfg["input_device"])
+                    if self.output_device_index is None and audio_cfg.get("output_device") is not None:
+                        self.output_device_index = int(audio_cfg["output_device"])
+                    if "headphones" in audio_cfg:
+                        self.headphones = bool(audio_cfg["headphones"])
+        except Exception:
+            pass
+
         self.is_running = False
         self.audio_in_queue = asyncio.Queue(maxsize=100)
         self.audio_out_queue = asyncio.Queue()
@@ -386,6 +411,86 @@ REGLAS GENERALES (valen siempre):
                 pass
         self.audio_in_queue.put_nowait(data)
 
+    def _open_stream_in(self):
+        kwargs = dict(format=FORMAT, channels=CHANNELS, rate=RATE_IN, input=True, frames_per_buffer=CHUNK)
+        if self.input_device_index is not None:
+            kwargs["input_device_index"] = self.input_device_index
+        return self._pa.open(**kwargs)
+
+    def _open_stream_out(self):
+        kwargs = dict(format=FORMAT, channels=CHANNELS, rate=RATE_OUT, output=True, frames_per_buffer=CHUNK)
+        if self.output_device_index is not None:
+            kwargs["output_device_index"] = self.output_device_index
+        return self._pa.open(**kwargs)
+
+    @classmethod
+    def list_audio_devices(cls):
+        import pyaudio
+        pa = pyaudio.PyAudio()
+        try:
+            inputs = []
+            outputs = []
+            default_in = -1
+            default_out = -1
+            try:
+                default_in = pa.get_default_input_device_info().get("index", -1)
+            except Exception:
+                pass
+            try:
+                default_out = pa.get_default_output_device_info().get("index", -1)
+            except Exception:
+                pass
+
+            for i in range(pa.get_device_count()):
+                try:
+                    info = pa.get_device_info_by_index(i)
+                    name = info.get("name", "")
+                    if info.get("maxInputChannels", 0) > 0:
+                        inputs.append({
+                            "index": i,
+                            "name": name,
+                            "is_default": i == default_in
+                        })
+                    if info.get("maxOutputChannels", 0) > 0:
+                        outputs.append({
+                            "index": i,
+                            "name": name,
+                            "is_default": i == default_out
+                        })
+                except Exception:
+                    continue
+            return {"inputs": inputs, "outputs": outputs, "default_input": default_in, "default_output": default_out}
+        finally:
+            pa.terminate()
+
+    def set_audio_devices(self, input_idx: int | None, output_idx: int | None, headphones: bool | None = None):
+        if headphones is not None:
+            self.headphones = bool(headphones)
+        self.input_device_index = input_idx
+        self.output_device_index = output_idx
+        if self._pa and self.is_running:
+            self._restart_audio_streams()
+
+    def _restart_audio_streams(self):
+        try:
+            if self._stream_in:
+                try:
+                    self._stream_in.stop_stream()
+                    self._stream_in.close()
+                except Exception:
+                    pass
+            if self._stream_out:
+                try:
+                    self._stream_out.stop_stream()
+                    self._stream_out.close()
+                except Exception:
+                    pass
+            self._stream_in = self._open_stream_in()
+            self._stream_out = self._open_stream_out()
+            logger.info(f"Streams de audio reiniciados: in={self.input_device_index}, out={self.output_device_index}")
+        except Exception as e:
+            logger.error(f"Fallo al reiniciar streams de audio: {e}")
+
     def _mic_thread(self):
         logger.info("Microfono capturando")
         last_log = 0.0
@@ -407,10 +512,7 @@ REGLAS GENERALES (valen siempre):
                                 self._stream_in.close()
                             except Exception:
                                 pass
-                        self._stream_in = self._pa.open(
-                            format=FORMAT, channels=CHANNELS, rate=RATE_IN,
-                            input=True, frames_per_buffer=CHUNK
-                        )
+                        self._stream_in = self._open_stream_in()
                         consecutive_errors = 0
                         logger.info("Microfono reconectado con exito.")
                         continue
@@ -453,10 +555,7 @@ REGLAS GENERALES (valen siempre):
                             self._stream_out.close()
                         except Exception:
                             pass
-                    self._stream_out = self._pa.open(
-                        format=FORMAT, channels=CHANNELS, rate=RATE_OUT,
-                        output=True, frames_per_buffer=CHUNK
-                    )
+                    self._stream_out = self._open_stream_out()
                 except Exception as re_out:
                     logger.error(f"Fallo al recuperar altavoz: {re_out}")
             self._mute_until = time.monotonic() + 0.5
@@ -670,10 +769,8 @@ REGLAS GENERALES (valen siempre):
             if self.use_audio_hardware:
                 try:
                     self._pa = pyaudio.PyAudio()
-                    self._stream_in = self._pa.open(format=FORMAT, channels=CHANNELS, rate=RATE_IN,
-                                                    input=True, frames_per_buffer=CHUNK)
-                    self._stream_out = self._pa.open(format=FORMAT, channels=CHANNELS, rate=RATE_OUT,
-                                                     output=True, frames_per_buffer=CHUNK)
+                    self._stream_in = self._open_stream_in()
+                    self._stream_out = self._open_stream_out()
                 except Exception as e:
                     self._emit({"estado": "error", "detalle": f"audio: {e}"})
                     raise RuntimeError(f"No se pudo abrir el audio: {e}") from e

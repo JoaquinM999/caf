@@ -64,36 +64,83 @@ def load_whitelist():
     """Mantiene compatibilidad retrospectiva con configs viejas."""
     return list(COMMON_PROGRAM_ALIASES.keys())
 
+_START_APPS_CACHE: dict[str, tuple[str, str]] | None = None
+
+def _get_start_apps() -> dict[str, tuple[str, str]]:
+    """Carga y cachea las aplicaciones instaladas de Windows (UWP, MSIX, Store y Desktop) via Get-StartApps."""
+    global _START_APPS_CACHE
+    if _START_APPS_CACHE is not None:
+        return _START_APPS_CACHE
+    apps = {}
+    if sys.platform == "win32":
+        try:
+            import json
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-StartApps | ConvertTo-Json"]
+            out = subprocess.check_output(cmd, text=True, timeout=8, stderr=subprocess.DEVNULL)
+            data = json.loads(out)
+            if isinstance(data, dict):
+                data = [data]
+            for item in data or []:
+                name = item.get("Name", "")
+                appid = item.get("AppID", "")
+                if name and appid:
+                    clean_k = name.lower().replace(" ", "").strip()
+                    apps[clean_k] = (name, appid)
+        except Exception:
+            pass
+    _START_APPS_CACHE = apps
+    return _START_APPS_CACHE
+
+
 def _buscar_acceso_directo(nombre: str) -> Path | None:
-    """Busca un acceso directo (.lnk) en el menú de inicio y escritorio de Windows."""
+    """Busca un acceso directo (.lnk o .url) en el menú de inicio y escritorio de Windows (incluyendo OneDrive)."""
+    userprofile = Path(os.environ.get("USERPROFILE", Path.home()))
     dirs = [
         Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
         Path(os.environ.get("ProgramData", "")) / "Microsoft/Windows/Start Menu/Programs",
-        Path(os.environ.get("USERPROFILE", "")) / "Desktop",
+        userprofile / "Desktop",
+        userprofile / "Escritorio",
+        userprofile / "OneDrive" / "Desktop",
+        userprofile / "OneDrive" / "Escritorio",
+        Path.home() / "Desktop",
+        Path.home() / "Escritorio",
+        Path.home() / "OneDrive" / "Desktop",
+        Path.home() / "OneDrive" / "Escritorio",
         Path(os.environ.get("PUBLIC", "")) / "Desktop",
     ]
-    norm = nombre.lower().strip()
+    norm = nombre.lower().replace(" ", "").strip()
     candidates = []
+    seen = set()
     for d in dirs:
-        if d.exists():
-            for f in d.rglob("*.lnk"):
-                base = f.stem.lower()
-                if norm == base:
-                    return f
-                if norm in base:
-                    candidates.append((len(base), f))
+        if d.exists() and d not in seen:
+            seen.add(d)
+            try:
+                for f in d.rglob("*.*"):
+                    if f.suffix.lower() in (".lnk", ".url"):
+                        base = f.stem.lower().replace(" ", "").strip()
+                        if norm == base:
+                            return f
+                        if norm in base or base in norm:
+                            candidates.append((len(base), f))
+            except Exception:
+                continue
     if candidates:
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
     return None
 
-def abrir_programa(nombre: str) -> str:
-    """Abre cualquier programa, aplicación o juego instalado en la PC."""
+
+def _abrir_un_programa(nombre: str) -> str:
+    """Abre un único programa, aplicación o juego instalado."""
+    import re
     nombre_limpio = (nombre or "").lower().strip()
-    for prefijo in ("abrir ", "ejecutar ", "iniciar ", "el programa ", "la app ", "la aplicación ", "la aplicacion "):
+    for prefijo in ("abrir ", "ejecutar ", "iniciar ", "el programa ", "la app ", "la aplicación ", "la aplicacion ", "el ", "la ", "los ", "las "):
         if nombre_limpio.startswith(prefijo):
             nombre_limpio = nombre_limpio[len(prefijo):].strip()
             
+    # Remover sufijos comunes como " app", " aplicación", " aplicacion", " programa"
+    nombre_limpio = re.sub(r'(\s+app|\s+aplicaci[oó]n|\s+programa)$', '', nombre_limpio, flags=re.IGNORECASE).strip()
+
     if not nombre_limpio:
         return "Error: no se especificó qué programa abrir."
 
@@ -106,7 +153,29 @@ def abrir_programa(nombre: str) -> str:
         except Exception:
             pass
 
-    # 2. Accesos directos (.lnk) de Windows en menú inicio o escritorio
+    # 2. Windows StartApps (UWP, MSIX, Store Apps, PWAs)
+    if sys.platform == "win32":
+        apps = _get_start_apps()
+        clean_key = nombre_limpio.replace(" ", "")
+        match = apps.get(clean_key)
+        if not match:
+            for k, (real_name, appid) in apps.items():
+                if clean_key in k or k in clean_key:
+                    match = (real_name, appid)
+                    break
+        if match:
+            real_name, appid = match
+            try:
+                os.startfile(f"shell:AppsFolder\\{appid}")
+                return f"Éxito: abrí {real_name}."
+            except Exception:
+                try:
+                    subprocess.Popen(f'explorer.exe shell:AppsFolder\\{appid}', shell=True)
+                    return f"Éxito: abrí {real_name}."
+                except Exception:
+                    pass
+
+    # 3. Accesos directos (.lnk y .url) en escritorio (incluyendo OneDrive) y menú inicio
     lnk = _buscar_acceso_directo(nombre_limpio)
     if lnk:
         try:
@@ -115,7 +184,7 @@ def abrir_programa(nombre: str) -> str:
         except Exception:
             pass
 
-    # 3. Intentos de ejecución directa en Windows
+    # 4. Intentos de ejecución directa en el sistema
     try:
         os.startfile(nombre_limpio)
         return f"Éxito: abrí {nombre_limpio}."
@@ -129,6 +198,24 @@ def abrir_programa(nombre: str) -> str:
                 return f"Éxito: mandé a abrir {nombre_limpio}."
             except Exception as e:
                 return f"No pude encontrar ni abrir el programa '{nombre}': {e}"
+
+
+def abrir_programa(nombre: str) -> str:
+    """Abre uno o más programas, aplicaciones o juegos instalados en la PC (soporta listas separadas por 'y', comas o punto y coma)."""
+    import re
+    if not nombre or not nombre.strip():
+        return "Error: no se especificó qué programa abrir."
+    
+    # Separar si el usuario pidió múltiples programas (ej: "Spotify, Trading View y Gemini App")
+    partes = re.split(r'[,;]|\s+(?:y|e|and|&)\s+', nombre, flags=re.IGNORECASE)
+    partes = [p.strip() for p in partes if p.strip()]
+    if len(partes) > 1:
+        resultados = []
+        for p in partes:
+            res = _abrir_un_programa(p)
+            resultados.append(res)
+        return "\n".join(resultados)
+    return _abrir_un_programa(nombre)
 
 def spotify_buscar(consulta: str) -> str:
     """Abre Spotify en los resultados de busqueda de `consulta` (no reproduce sola)."""

@@ -195,7 +195,7 @@ async function main() {
     (role, text) => {
       console.log(`CAF [${role}]: ${text}`);
       if (text.trim() === "") return;
-      State.chatHistory.push({ id: Date.now(), role: role as "user" | "assistant", content: text });
+      State.cafChatHistory.push({ id: Date.now(), role: role as "user" | "assistant", content: text });
       State.notify();
     }
   );

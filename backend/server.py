@@ -81,9 +81,71 @@ async def start_engine(profile_name: str):
         engine_task.add_done_callback(_on_done)
 
 
+import yaml
+
+CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
+def load_audio_config():
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+                return cfg.get("audio", {})
+        except Exception:
+            pass
+    return {}
+
+def save_audio_config(input_idx, output_idx, headphones):
+    cfg = {}
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    audio_cfg = cfg.setdefault("audio", {})
+    if input_idx is not None:
+        audio_cfg["input_device"] = input_idx
+    if output_idx is not None:
+        audio_cfg["output_device"] = output_idx
+    if headphones is not None:
+        audio_cfg["headphones"] = headphones
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, default_flow_style=False)
+    except Exception as e:
+        logger.warning(f"No se pudo guardar config.yaml: {e}")
+
+async def _parent_watchdog():
+    parent_pid_str = os.getenv("COUCOU_PARENT_PID")
+    if not parent_pid_str or not parent_pid_str.strip().isdigit():
+        return
+    parent_pid = int(parent_pid_str.strip())
+    logger.info(f"Iniciando watchdog de Coucou (PID padre: {parent_pid})")
+    while True:
+        await asyncio.sleep(2.0)
+        if sys.platform == "win32":
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
+            if not h:
+                logger.info(f"El proceso padre Coucou ({parent_pid}) ha terminado. Cerrando backend de Caf automáticamente...")
+                if engine:
+                    engine.stop()
+                os._exit(0)
+            ctypes.windll.kernel32.CloseHandle(h)
+
+async def _delayed_exit():
+    await asyncio.sleep(0.3)
+    if engine:
+        engine.stop()
+    os._exit(0)
+
+
 @app.on_event("startup")
 async def on_startup():
     logger.info("FastAPI startup: warming up Caf voice engine with profile 'amiguito'...")
+    asyncio.create_task(_parent_watchdog())
     try:
         await start_engine("amiguito")
     except Exception as e:
@@ -104,6 +166,39 @@ def get_profiles():
 async def change_profile(profile_name: str):
     await start_engine(profile_name)
     return {"status": "ok", "message": f"Profile changed to {profile_name}"}
+
+
+@app.get("/audio/devices")
+def get_audio_devices():
+    devices = CafEngine.list_audio_devices()
+    cfg = load_audio_config()
+    current_in = getattr(engine, "input_device_index", None) if engine else cfg.get("input_device")
+    current_out = getattr(engine, "output_device_index", None) if engine else cfg.get("output_device")
+    headphones = getattr(engine, "headphones", False) if engine else cfg.get("headphones", False)
+    return {
+        **devices,
+        "current_input": current_in,
+        "current_output": current_out,
+        "headphones": headphones,
+    }
+
+
+@app.post("/audio/devices")
+async def set_audio_devices(payload: dict):
+    in_idx = payload.get("input_device")
+    out_idx = payload.get("output_device")
+    headphones = payload.get("headphones")
+    save_audio_config(in_idx, out_idx, headphones)
+    if engine:
+        engine.set_audio_devices(in_idx, out_idx, headphones)
+    return {"status": "ok", "message": "Dispositivos de audio actualizados exitosamente."}
+
+
+@app.post("/shutdown")
+async def shutdown():
+    logger.info("Shutdown solicitado por el cliente Coucou.")
+    asyncio.create_task(_delayed_exit())
+    return {"status": "ok", "message": "Cerrando backend de Caf."}
 
 
 @app.websocket("/ws")

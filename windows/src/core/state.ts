@@ -225,6 +225,7 @@ class AppState {
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
+  cafChatHistory: ChatMessage[] = [];
   voiceStatus = "Esperando tu voz...";
   cafClient: any = null;
   pendingApproval: ApprovalInfo | null = null;

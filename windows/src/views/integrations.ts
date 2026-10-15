@@ -445,34 +445,166 @@ export function hasIntegrationData(id: string): boolean {
   }
 }
 
+interface AudioDevicesResponse {
+  input_devices: { index: number; name: string }[];
+  output_devices: { index: number; name: string }[];
+  current_input_index: number | null;
+  current_output_index: number | null;
+}
+
+let cachedAudioDevices: AudioDevicesResponse | null = null;
+let audioDevicesLoading = false;
+
+function buildCafAudioSection(): HTMLElement {
+  const container = h("div", {
+    style: "margin-top: 6px; width: 100%; display: flex; flex-direction: column; gap: 5px; background: rgba(255,255,255,0.03); border: 1px solid var(--hairline); border-radius: 8px; padding: 7px 9px;"
+  });
+
+  const titleRow = h("div", {
+    style: "display: flex; justify-content: space-between; align-items: center;"
+  },
+    h("span", { style: "font-size: 11px; font-weight: 600; color: var(--dim-2);", text: "Dispositivos de Audio" }),
+    h("span", { class: "caf-audio-status", style: "font-size: 10px; color: var(--dim-4);", text: "" })
+  );
+  const statusSpan = titleRow.querySelector(".caf-audio-status") as HTMLElement;
+
+  const micSelect = h("select", {
+    style: "width: 100%; background: #141518; color: var(--ink); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 3px 6px; font-size: 10.5px; outline: none; cursor: pointer; text-overflow: ellipsis;"
+  }) as HTMLSelectElement;
+
+  const speakerSelect = h("select", {
+    style: "width: 100%; background: #141518; color: var(--ink); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 3px 6px; font-size: 10.5px; outline: none; cursor: pointer; text-overflow: ellipsis;"
+  }) as HTMLSelectElement;
+
+  const quickHeadphonesBtn = h("button", {
+    style: "display: none; align-items: center; justify-content: center; gap: 5px; width: 100%; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); color: #38BDF8; border-radius: 6px; padding: 4px 8px; font-size: 10.5px; font-weight: 500; cursor: pointer; margin-top: 2px;",
+    text: "🎧 Conectar Auriculares (AirPods)"
+  });
+
+  function populate(data: AudioDevicesResponse) {
+    clear(micSelect);
+    const defIn = h("option", { value: "-1", text: "🎙️ Micrófono Predeterminado del Sistema" });
+    micSelect.append(defIn);
+    for (const d of data.input_devices) {
+      const opt = h("option", { value: String(d.index), text: d.name }) as HTMLOptionElement;
+      if (data.current_input_index === d.index) opt.selected = true;
+      micSelect.append(opt);
+    }
+    if (data.current_input_index === null || data.current_input_index === undefined) {
+      defIn.selected = true;
+    }
+
+    clear(speakerSelect);
+    const defOut = h("option", { value: "-1", text: "🔊 Altavoz Predeterminado del Sistema" });
+    speakerSelect.append(defOut);
+    for (const d of data.output_devices) {
+      const opt = h("option", { value: String(d.index), text: d.name }) as HTMLOptionElement;
+      if (data.current_output_index === d.index) opt.selected = true;
+      speakerSelect.append(opt);
+    }
+    if (data.current_output_index === null || data.current_output_index === undefined) {
+      defOut.selected = true;
+    }
+
+    // Check if AirPods / Headphones exist in list
+    const hpOut = data.output_devices.find(d => /airpods|auricular|headphone|headset/i.test(d.name));
+    const hpIn = data.input_devices.find(d => /airpods|auricular|headphone|headset/i.test(d.name));
+    if (hpOut) {
+      quickHeadphonesBtn.style.display = "flex";
+      quickHeadphonesBtn.onclick = () => {
+        if (hpIn) micSelect.value = String(hpIn.index);
+        speakerSelect.value = String(hpOut.index);
+        void saveAudioSelection();
+      };
+    }
+  }
+
+  async function saveAudioSelection() {
+    statusSpan.textContent = "Guardando...";
+    statusSpan.style.color = "#38BDF8";
+    const inVal = parseInt(micSelect.value, 10);
+    const outVal = parseInt(speakerSelect.value, 10);
+    const payload = {
+      input_device_index: inVal >= 0 ? inVal : null,
+      output_device_index: outVal >= 0 ? outVal : null,
+    };
+    try {
+      const res = await fetch("http://127.0.0.1:8000/audio/devices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        statusSpan.textContent = "✓ Guardado";
+        statusSpan.style.color = "#22C55E";
+        if (cachedAudioDevices) {
+          cachedAudioDevices.current_input_index = payload.input_device_index;
+          cachedAudioDevices.current_output_index = payload.output_device_index;
+        }
+        setTimeout(() => { statusSpan.textContent = ""; }, 2500);
+      } else {
+        statusSpan.textContent = "Error";
+        statusSpan.style.color = "#F4505E";
+      }
+    } catch {
+      statusSpan.textContent = "Backend offline";
+      statusSpan.style.color = "#F4505E";
+    }
+  }
+
+  micSelect.addEventListener("change", () => void saveAudioSelection());
+  speakerSelect.addEventListener("change", () => void saveAudioSelection());
+
+  if (cachedAudioDevices) {
+    populate(cachedAudioDevices);
+  } else if (!audioDevicesLoading) {
+    audioDevicesLoading = true;
+    statusSpan.textContent = "Buscando...";
+    fetch("http://127.0.0.1:8000/audio/devices")
+      .then(res => res.json())
+      .then((data: AudioDevicesResponse) => {
+        cachedAudioDevices = data;
+        audioDevicesLoading = false;
+        statusSpan.textContent = "";
+        populate(data);
+      })
+      .catch(() => {
+        audioDevicesLoading = false;
+        statusSpan.textContent = "Sin conexión";
+      });
+  }
+
+  container.append(
+    titleRow,
+    h("div", { style: "display: flex; flex-direction: column; gap: 2px;" },
+      h("label", { style: "font-size: 10px; color: var(--dim-3);", text: "Micrófono (Entrada):" }),
+      micSelect
+    ),
+    h("div", { style: "display: flex; flex-direction: column; gap: 2px;" },
+      h("label", { style: "font-size: 10px; color: var(--dim-3);", text: "Salida (Auriculares / Altavoces):" }),
+      speakerSelect
+    ),
+    quickHeadphonesBtn
+  );
+
+  return container;
+}
+
 export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHooks): HTMLElement {
   if (task.id === "integration_amiguito") {
     const isLive = State.voiceStatus === "Live" || State.voiceStatus === "Te estoy escuchando..." || State.voiceStatus === "Esperando tu voz..." || State.voiceStatus === "Gemini está pensando..." || State.voiceStatus === "Gemini está hablando...";
-    const isSpeaking = State.voiceStatus === "Gemini está hablando...";
-    const isListening = State.voiceStatus === "Te estoy escuchando..." || State.voiceStatus === "Esperando tu voz..." || State.voiceStatus === "Live";
-    
-    let avatarAnim = "";
-    if (isSpeaking) {
-      avatarAnim = "pulse 0.5s infinite alternate";
-    } else if (isListening) {
-      avatarAnim = "pulse 1.5s infinite";
-    }
-    
-    const avatar = h("div", { 
-      style: `width: 48px; height: 48px; border-radius: 50%; background: var(--wash); display: flex; align-items: center; justify-content: center; font-size: 24px; animation: ${avatarAnim}; transition: all 0.3s ease; box-shadow: 0 0 10px var(--wash);`
-    }, h("span", { text: isSpeaking ? "🗣️" : isListening ? "👂" : "🤖" }));
 
     return h(
       "div",
-      { class: "int-card", style: "display: flex; flex-direction: column; align-items: center; padding: 20px;" },
-      avatar,
-      h("div", { style: "font-weight: 600; font-size: 16px; margin-top: 12px;" }, "Caf (Amiguito)"),
-      h("div", { class: "int-status", style: "margin-top: 8px;" }, 
+      { class: "int-card", style: "padding: 8px 12px 0 108px;" },
+      header(task.color, "Caf", "Voz con Gemini Live"),
+      h("div", { class: "int-status", style: "margin-top: 4px;" }, 
         dot(isLive ? "#22C55E" : "#6B7280", 5), 
         h("span", { text: State.voiceStatus })
       ),
-      h("div", { style: "color: var(--dim-4); font-size: 12px; margin-top: 12px; text-align: center;" }, 
-        "Di 'CAF' para iniciar."
+      buildCafAudioSection(),
+      h("div", { style: "color: var(--dim-4); font-size: 10.5px; margin-top: 6px; text-align: left;" }, 
+        "Di 'CAF' para hablar o chatea en la pestaña Chat."
       )
     );
   }
