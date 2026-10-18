@@ -108,7 +108,24 @@ TOOLS = {
         desc="Borra un archivo de la carpeta de trabajo. Requiere confirmacion explicita del usuario ('si').",
         params={"ruta_relativa": "Ruta relativa del archivo", "confirmacion": "'si' solo si el usuario lo confirmo"},
         required=["ruta_relativa"], fn=caf_tools.borrar_archivo),
+    "coucou_pills": dict(
+        desc="Controla los pills (accesos/widgets) de la isla superior de Coucou en pantalla. Permite listar ('list'), agregar ('add'), quitar ('remove') o definir el pill principal ('set_main') como Stripe, GitHub, Vercel, Resend, n8n, Notion, etc.",
+        params={"accion": "Acción a realizar: 'list', 'add', 'remove' o 'set_main'", "nombres": "Nombres de los pills separados por coma (ej. 'GitHub, Stripe')"},
+        required=["accion"], fn=caf_tools.coucou_pills),
+    "coucou_info": dict(
+        desc="Lee toda la información en vivo que tiene la isla de Coucou: qué agentes de código están trabajando (Claude Code, Codex, Antigravity) y qué paso hacen, porcentaje de uso de planes, canción actual de Spotify, y los datos de Stripe, GitHub, Vercel, Resend, Notion, Cal.com, etc.",
+        params={},
+        required=[], fn=caf_tools.coucou_info),
+    "preparar_email": dict(
+        desc="Abre la aplicación de correo del usuario con destinatario, asunto y cuerpo redactados para revisar y enviar. Nada se envía solo.",
+        params={"destinatario": "Dirección de correo electrónico (ej. 'nombre@dominio.com')", "asunto": "Asunto del correo", "cuerpo": "Texto completo del correo redactado"},
+        required=["destinatario", "asunto", "cuerpo"], fn=caf_tools.preparar_email),
+    "spotify_volumen": dict(
+        desc="Ajusta el volumen de reproducción de Spotify en un valor de 0 a 100%.",
+        params={"volumen": "Nivel de volumen entre 0 y 100"},
+        required=["volumen"], fn=caf_tools.spotify_volumen),
 }
+
 
 
 def _rms(data: bytes) -> int:
@@ -255,6 +272,7 @@ class CafEngine:
             self.output_device_index = int(dev_out.strip())
 
         try:
+            import yaml
             cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
             if cfg_path.exists():
                 with open(cfg_path, "r", encoding="utf-8") as f:
@@ -286,9 +304,9 @@ class CafEngine:
 
         # Filtrado de ruido y push-to-talk (ver README en los comentarios de abajo)
         self.gate = NoiseGate(
-            min_open=int(os.getenv("CAF_GATE_MIN", "80")),
-            ratio=float(os.getenv("CAF_GATE_RATIO", "2.5")),
-            open_after=int(os.getenv("CAF_GATE_HITS", "2")),
+            min_open=int(os.getenv("CAF_GATE_MIN", "50")),
+            ratio=float(os.getenv("CAF_GATE_RATIO", "2.0")),
+            open_after=int(os.getenv("CAF_GATE_HITS", "1")),
             preroll=int(os.getenv("CAF_GATE_PREROLL", "6")),
         ) if os.getenv("CAF_GATE", "1") == "1" else None
         self.ptt_enabled = os.getenv("CAF_PTT", "0") == "1"
@@ -298,12 +316,40 @@ class CafEngine:
         self._ptt_hooks = []
         self._last_gate_log = 0.0
 
+        import threading
+        self._stream_lock = threading.Lock()
+        self._stream_in_active = True
+        self._current_user_text = ""
+        self._current_caf_text = ""
+        self._turn_start_time = 0.0
+
+        self.model = os.getenv("CAF_MODEL", "")
+        self.voice = os.getenv("CAF_VOICE", "")
+        try:
+            import yaml
+            cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
+            if cfg_path.exists():
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                    if not self.voice:
+                        self.voice = cfg.get("voice", "")
+                    if not self.model:
+                        self.model = cfg.get("model", "")
+        except Exception:
+            pass
+
+        if not self.voice:
+            self.voice = getattr(self.profile, "voz", "Aoede")
+        if not self.model:
+            self.model = "gemini-3.8-live"
+
         # Modo espera con palabra de activacion local ("Caf"). Si falta Vosk o el modelo, queda siempre activo.
         self.wake = None
         self.wake_enabled = False
-        # 30 segundos de inactividad para volver a dormir de forma natural
-        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "30"))
-        self._preroll = deque(maxlen=int(0.8 * RATE_IN / CHUNK))  # ~0.8 s de audio previo a la activacion
+        # 45 segundos de inactividad para volver a dormir de forma natural
+        self.idle_seconds = float(os.getenv("CAF_IDLE_SECONDS", "45"))
+        self._preroll = deque(maxlen=int(2.0 * RATE_IN / CHUNK))  # ~2.0 s de audio previo a la activacion para no cortar ordenes
+
         self._last_activity = time.monotonic()
         self._sleep_after_speech = False
         self._sleep_deadline = 0.0
@@ -365,12 +411,13 @@ class CafEngine:
 
 REGLAS GENERALES (valen siempre):
 - Si el usuario te llama por tu nombre ("Caf") sin pedir nada más, contestá solamente: "Sí, decime qué necesitás." y esperá atentamente.
+- Una vez que la conversación está activa, el usuario NO necesita repetir tu nombre ("Caf" o "Coucou") en cada frase: respondé siempre a todas sus preguntas, pedidos o comentarios siguientes de forma natural y directa.
 - Llamá a la herramienta desactivar_asistente SOLO si el usuario pide explícitamente que te desactives, te duermas o se despide ("ya podés desactivarte", "chau Caf", "dormí", "hasta luego"). Un simple "gracias" NO es una despedida: contestá brevemente con amabilidad ("De nada", "A la orden") y seguí atento. Jamás digas cosas como "en ningún momento te llamé" ni te disculpes innecesariamente.
 - Si te piden reproducir música o abrir una canción (ej. en Spotify o YouTube), ejecutá la herramienta inmediatamente y confirmá de manera breve y positiva ("Dale, te pongo [canción]").
 - Si el usuario te pide que recuerdes algo ("recordá que...", "acordate de...", "guardá en tu memoria...", "de ahora en adelante siempre..."), ejecutá la herramienta 'recordar' inmediatamente para guardarlo en tu memoria persistente.
 - El usuario a veces piensa en voz alta: dice "eh...", hace pausas o deja frases a medio decir. Esperá pacientemente a que termine su pedido antes de interrumpir.
 - Si te piden información actual (noticias, datos, precios, clima, resultados), usá buscar_web (y leer_pagina si hace falta más detalle) y respondé con un resumen corto.
-- PRIVACIDAD TOTAL Y RESPETO: Solo debés actuar si el usuario te habla DIRECTAMENTE a vos ("Caf...", "Coucou..."). Si escuchás una charla casual en la habitación entre Joako y otra persona (su hermano, amigos, etc.) o llamadas telefónicas que no sean una orden clara para vos, NUNCA ejecutes herramientas (no abras programas, no pongas música, no busques videos) y QUEDATE EN SILENCIO TOTAL.
+- PRIVACIDAD: Solo ignorá el audio si escuchás claramente una charla ajena entre varias personas en la habitación que no sea para vos. Si el usuario se dirige a vos o continúa la conversación, respondé siempre.
 - Respondé de manera natural, concisa y conversacional a lo que escuches.""" + obtener_prompt_memoria()
         kwargs = dict(
             response_modalities=["AUDIO"],
@@ -381,7 +428,7 @@ REGLAS GENERALES (valen siempre):
         if os.getenv("CAF_MINIMAL", "0") != "1":
             kwargs.update(
                 speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.profile.voz))),
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice or getattr(self.profile, "voz", "Aoede")))),
                 input_audio_transcription=types.AudioTranscriptionConfig(),
                 output_audio_transcription=types.AudioTranscriptionConfig(),
                 context_window_compression=types.ContextWindowCompressionConfig(
@@ -389,11 +436,11 @@ REGLAS GENERALES (valen siempre):
                 session_resumption=types.SessionResumptionConfig(handle=self._resume_handle),
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
-                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                         # LOW = tarda mas en dar por terminada la frase (tolera "eh..." y pausas largas)
                         end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
-                        prefix_padding_ms=100,
-                        silence_duration_ms=int(os.getenv("CAF_SILENCE_MS", "1800")),
+                        prefix_padding_ms=150,
+                        silence_duration_ms=int(os.getenv("CAF_SILENCE_MS", "1100")),
                     )),
             )
             if os.getenv("CAF_PROACTIVE", "0") == "1":
@@ -473,22 +520,29 @@ REGLAS GENERALES (valen siempre):
 
     def _restart_audio_streams(self):
         try:
-            if self._stream_in:
-                try:
-                    self._stream_in.stop_stream()
-                    self._stream_in.close()
-                except Exception:
-                    pass
-            if self._stream_out:
-                try:
-                    self._stream_out.stop_stream()
-                    self._stream_out.close()
-                except Exception:
-                    pass
-            self._stream_in = self._open_stream_in()
-            self._stream_out = self._open_stream_out()
-            logger.info(f"Streams de audio reiniciados: in={self.input_device_index}, out={self.output_device_index}")
+            self._stream_in_active = False
+            time.sleep(0.08)
+            with self._stream_lock:
+                if self._stream_in:
+                    try:
+                        self._stream_in.stop_stream()
+                        self._stream_in.close()
+                    except Exception:
+                        pass
+                    self._stream_in = None
+                if self._stream_out:
+                    try:
+                        self._stream_out.stop_stream()
+                        self._stream_out.close()
+                    except Exception:
+                        pass
+                    self._stream_out = None
+                self._stream_in = self._open_stream_in()
+                self._stream_out = self._open_stream_out()
+                self._stream_in_active = True
+                logger.info(f"Streams de audio reiniciados: in={self.input_device_index}, out={self.output_device_index}")
         except Exception as e:
+            self._stream_in_active = True
             logger.error(f"Fallo al reiniciar streams de audio: {e}")
 
     def _mic_thread(self):
@@ -496,8 +550,19 @@ REGLAS GENERALES (valen siempre):
         last_log = 0.0
         consecutive_errors = 0
         while self.is_running:
+            if not getattr(self, "_stream_in_active", True):
+                time.sleep(0.05)
+                continue
+            data = None
             try:
-                data = self._stream_in.read(CHUNK, exception_on_overflow=False)
+                with self._stream_lock:
+                    if not self._stream_in or not getattr(self, "_stream_in_active", True):
+                        data = None
+                    else:
+                        data = self._stream_in.read(CHUNK, exception_on_overflow=False)
+                if data is None:
+                    time.sleep(0.03)
+                    continue
                 consecutive_errors = 0
             except Exception as e:
                 consecutive_errors += 1
@@ -506,13 +571,14 @@ REGLAS GENERALES (valen siempre):
                 if consecutive_errors >= 3:
                     try:
                         logger.info("Intentando recuperar conexion con el microfono...")
-                        if self._stream_in:
-                            try:
-                                self._stream_in.stop_stream()
-                                self._stream_in.close()
-                            except Exception:
-                                pass
-                        self._stream_in = self._open_stream_in()
+                        with self._stream_lock:
+                            if self._stream_in:
+                                try:
+                                    self._stream_in.stop_stream()
+                                    self._stream_in.close()
+                                except Exception:
+                                    pass
+                            self._stream_in = self._open_stream_in()
                         consecutive_errors = 0
                         logger.info("Microfono reconectado con exito.")
                         continue
@@ -524,6 +590,8 @@ REGLAS GENERALES (valen siempre):
                                 self._emit, {"estado": "error", "detalle": f"microfono desconectado: {e}"})
                             break
                         continue
+            if not data:
+                continue
             rms = _rms(data)
             if rms > 250 and time.monotonic() - last_log > 1.0:
                 logger.debug(f"Audio captado (volumen {rms})")
@@ -533,11 +601,14 @@ REGLAS GENERALES (valen siempre):
     async def _speaker_consumer(self):
         while self.is_running:
             try:
-                data = await asyncio.wait_for(self.audio_out_queue.get(), timeout=0.2)
+                data = await asyncio.wait_for(self.audio_out_queue.get(), timeout=0.1)
             except asyncio.TimeoutError:
                 if self._playing and time.monotonic() > self._mute_until:
                     self._playing = False
                     self._last_activity = time.monotonic()
+                    if self.gate:
+                        self.gate.open = True
+                        self.gate.hang = self.gate.hang_chunks
                     if self._sleep_after_speech:
                         self._go_to_sleep("el asistente se despidio")  # ya se despidio
                     else:
@@ -545,20 +616,25 @@ REGLAS GENERALES (valen siempre):
                 continue
             self._playing = True
             try:
-                await asyncio.to_thread(self._stream_out.write, data)
+                def _safe_write(chunk):
+                    with self._stream_lock:
+                        if self._stream_out:
+                            self._stream_out.write(chunk)
+                await asyncio.to_thread(_safe_write, data)
             except Exception as e:
                 logger.warning(f"Error reproduciendo audio: {e}")
                 try:
-                    if self._stream_out:
-                        try:
-                            self._stream_out.stop_stream()
-                            self._stream_out.close()
-                        except Exception:
-                            pass
-                    self._stream_out = self._open_stream_out()
+                    with self._stream_lock:
+                        if self._stream_out:
+                            try:
+                                self._stream_out.stop_stream()
+                                self._stream_out.close()
+                            except Exception:
+                                pass
+                        self._stream_out = self._open_stream_out()
                 except Exception as re_out:
                     logger.error(f"Fallo al recuperar altavoz: {re_out}")
-            self._mute_until = time.monotonic() + 0.5
+            self._mute_until = time.monotonic() + 0.2
 
     # ---------------------------------------------------------------- sesion
     def set_ptt(self, down: bool):
@@ -651,6 +727,8 @@ REGLAS GENERALES (valen siempre):
             elif self.gate:
                 was_open = self.gate.open
                 chunks = self.gate.process(data)
+                if self.gate.open and self.gate.last_rms > self.gate.threshold:
+                    self._last_activity = time.monotonic()
                 if self.gate.open != was_open:
                     logger.debug(f"gate {'ABIERTA' if self.gate.open else 'cerrada'} "
                                  f"(rms={self.gate.last_rms}, umbral={self.gate.threshold:.0f})")
@@ -692,9 +770,24 @@ REGLAS GENERALES (valen siempre):
                         self._set_estado("hablando")
             if sc.input_transcription and sc.input_transcription.text:
                 self._last_activity = time.monotonic()
+                if not self._turn_start_time:
+                    self._turn_start_time = time.monotonic()
+                self._current_user_text += " " + sc.input_transcription.text
                 self._emit({"transcripcion": {"rol": "usuario", "texto": sc.input_transcription.text}})
             if sc.output_transcription and sc.output_transcription.text:
+                self._current_caf_text += " " + sc.output_transcription.text
                 self._emit({"transcripcion": {"rol": "caf", "texto": sc.output_transcription.text}})
+            if sc.turn_complete:
+                if self._current_user_text or self._current_caf_text:
+                    dur = time.monotonic() - (self._turn_start_time or time.monotonic())
+                    try:
+                        from caf.stats import record_turn
+                        record_turn(self._current_user_text.strip(), self._current_caf_text.strip(), dur)
+                    except Exception:
+                        pass
+                    self._current_user_text = ""
+                    self._current_caf_text = ""
+                    self._turn_start_time = 0.0
         if response.tool_call:
             for fc in response.tool_call.function_calls or []:
                 asyncio.create_task(self._run_tool(fc, session))
@@ -706,6 +799,11 @@ REGLAS GENERALES (valen siempre):
 
     async def _run_tool(self, fc, session):
         logger.info(f"Tool solicitada: {fc.name} {fc.args}")
+        try:
+            from caf.stats import record_tool_call
+            record_tool_call(fc.name)
+        except Exception:
+            pass
         self._set_estado("ejecutando_herramienta", fc.name)
         spec = TOOLS.get(fc.name)
         try:
@@ -784,9 +882,10 @@ REGLAS GENERALES (valen siempre):
             while self.is_running:
                 connected_at = time.monotonic()
                 try:
-                    self._set_estado("reconectando" if attempt else "conectando", MODEL)
-                    async with self.client.aio.live.connect(model=MODEL, config=self._build_config()) as session:
-                        logger.info(f"Conectado a {MODEL}")
+                    cur_model = self.model or MODEL
+                    self._set_estado("reconectando" if attempt else "conectando", cur_model)
+                    async with self.client.aio.live.connect(model=cur_model, config=self._build_config()) as session:
+                        logger.info(f"Conectado a {cur_model}")
                         while not self.audio_in_queue.empty():  # audio viejo de antes de conectar
                             self.audio_in_queue.get_nowait()
                         self._set_estado("escuchando" if self.mode == "activo" else "dormido")
@@ -807,13 +906,20 @@ REGLAS GENERALES (valen siempre):
                     raise
                 except Exception as e:
                     logger.exception("Error en la sesion Live")
-                    if ("quota" in str(e).lower() or "1011" in str(e)) and os.getenv("CAF_SEARCH", "0") == "1":
+                    err_str = str(e).lower()
+                    if ("quota" in err_str or "1011" in err_str) and os.getenv("CAF_SEARCH", "0") == "1":
                         logger.warning("Fallo de cuota en Google Search grounding. Desactivando CAF_SEARCH y reintentando...")
                         os.environ["CAF_SEARCH"] = "0"
                         continue
+                    if "1008" in err_str or "session not found" in err_str or "expired" in err_str or "not found" in err_str:
+                        logger.warning("Sesion Live expirada o no encontrada (1008). Limpiando handle y reconectando...")
+                        self._resume_handle = None
+                        attempt = 0
+                        await asyncio.sleep(0.5)
+                        continue
                     self._emit({"estado": "error", "detalle": str(e)})
                     attempt = 1 if time.monotonic() - connected_at > 10 else attempt + 1
-                    if attempt >= 3:
+                    if attempt >= 2:
                         self._resume_handle = None  # por si el handle quedo invalido
                     await asyncio.sleep(min(2 ** attempt, 30))
         finally:

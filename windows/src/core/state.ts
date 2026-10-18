@@ -171,7 +171,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openOnHover: false,
   absenceInterval: 180,
   activeIntegrations: [
-    "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
+    "integration_amiguito", "integration_resend", "integration_n8n", "integration_vercel",
   ],
   mainPill: DEFAULT_MAIN_PILL,
   screen: "primary",
@@ -412,7 +412,7 @@ class AppState {
     this.settings.mainPill = d.mainPill;
     this.settings.activeIntegrations = d.activeIntegrations;
     for (const def of availablePills(this.os)) {
-      const shouldLoad = def.id === d.mainPill || d.activeIntegrations.includes(def.id);
+      const shouldLoad = def.id === d.mainPill || d.activeIntegrations.includes(def.id) || def.id === "integration_amiguito";
       const idx = this.tasks.findIndex((t) => t.id === def.id);
       if (shouldLoad && idx < 0) this.tasks.push(taskFor(def, this.settings.pillColors));
       const busy = idx >= 0 && (this.tasks[idx].state !== "idle" || this.tasks[idx].steps.length > 0);

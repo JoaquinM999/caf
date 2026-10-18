@@ -16,7 +16,7 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
-# Configure logging with both stream and file handlers
+# Configure logging without duplicating lines when stdout is already redirected to coucou-backend.log
 log_file = None
 if getattr(sys, "frozen", False):
     log_file = Path(sys.executable).parent / "coucou-backend.log"
@@ -25,13 +25,18 @@ elif os.environ.get("LOCALAPPDATA"):
 else:
     log_file = Path("coucou-backend.log")
 
-handlers = [logging.StreamHandler(sys.stdout) if sys.stdout else logging.NullHandler()]
+handlers = []
+if not getattr(sys, "frozen", False) and sys.stdout:
+    handlers.append(logging.StreamHandler(sys.stdout))
 try:
     fh = logging.FileHandler(str(log_file), encoding="utf-8", mode="a")
     fh.setLevel(logging.INFO)
     handlers.append(fh)
 except Exception:
-    pass
+    if sys.stdout and not handlers:
+        handlers.append(logging.StreamHandler(sys.stdout))
+if not handlers:
+    handlers.append(logging.NullHandler())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,11 +47,20 @@ logging.basicConfig(
 logger = logging.getLogger("server")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from caf.engine import CafEngine
 from caf.profiles_manager import get_available_profiles
 
 app = FastAPI(title="Caf V2 Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 engine = None
 engine_task = None
@@ -64,11 +78,11 @@ def _on_done(t: asyncio.Task):
         events.put_nowait({"estado": "error", "detalle": str(exc)})
 
 
-async def start_engine(profile_name: str):
+async def start_engine(profile_name: str, force_restart: bool = False):
     """(Re)inicia el motor con un perfil. Detiene el anterior primero."""
     global engine, engine_task
     async with _lock:
-        if engine is not None and engine.is_running and getattr(engine.profile, "nombre", "") == profile_name:
+        if not force_restart and engine is not None and engine.is_running and getattr(engine.profile, "nombre", "") == profile_name:
             logger.info(f"Caf engine already active with profile '{profile_name}'; keeping running.")
             return
         if engine is not None:
@@ -83,7 +97,16 @@ async def start_engine(profile_name: str):
 
 import yaml
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+def get_config_path() -> Path:
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        for cand in (exe_dir / "config.yaml", exe_dir.parents[2] / "backend" / "config.yaml"):
+            if cand.exists():
+                return cand
+        return exe_dir / "config.yaml"
+    return Path(__file__).resolve().parent / "config.yaml"
+
+CONFIG_PATH = get_config_path()
 
 def load_audio_config():
     if CONFIG_PATH.exists():
@@ -95,7 +118,7 @@ def load_audio_config():
             pass
     return {}
 
-def save_audio_config(input_idx, output_idx, headphones):
+def save_audio_config(input_idx, output_idx, headphones, auto_headphones=None):
     cfg = {}
     if CONFIG_PATH.exists():
         try:
@@ -106,10 +129,16 @@ def save_audio_config(input_idx, output_idx, headphones):
     audio_cfg = cfg.setdefault("audio", {})
     if input_idx is not None:
         audio_cfg["input_device"] = input_idx
+    else:
+        audio_cfg.pop("input_device", None)
     if output_idx is not None:
         audio_cfg["output_device"] = output_idx
+    else:
+        audio_cfg.pop("output_device", None)
     if headphones is not None:
         audio_cfg["headphones"] = headphones
+    if auto_headphones is not None:
+        audio_cfg["auto_headphones"] = auto_headphones
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             yaml.safe_dump(cfg, f, default_flow_style=False)
@@ -142,14 +171,66 @@ async def _delayed_exit():
     os._exit(0)
 
 
+# ── Puente RPC con la Isla de Coucou ─────────────────────────────────────────
+
+_pending_island_asks = {}
+_ask_seq = 0
+_connected_websockets: set = set()
+_main_loop = None
+
+async def _ask_island_async(kind: str, input_data: dict) -> str:
+    global _ask_seq
+    if not _connected_websockets:
+        return "Error: la Isla de Coucou no está conectada por WebSocket."
+    _ask_seq += 1
+    req_id = _ask_seq
+    fut = asyncio.get_running_loop().create_future()
+    _pending_island_asks[req_id] = fut
+    try:
+        payload = {"island_ask": {"id": req_id, "kind": kind, "input": input_data}}
+        text_data = json.dumps(payload)
+        delivered = False
+        for ws in list(_connected_websockets):
+            try:
+                await ws.send_text(text_data)
+                delivered = True
+            except Exception:
+                _connected_websockets.discard(ws)
+        if not delivered:
+            return "Error: no se pudo enviar la consulta a la Isla de Coucou."
+        return await asyncio.wait_for(fut, timeout=6.0)
+    except asyncio.TimeoutError:
+        return f"Error: la Isla de Coucou tardó más de 6s en responder ({kind})."
+    except Exception as e:
+        return f"Error consultando la Isla: {e}"
+    finally:
+        _pending_island_asks.pop(req_id, None)
+
+def _island_ask_sync_bridge(kind: str, input_data: dict) -> str:
+    global _main_loop
+    if _main_loop is None or not _main_loop.is_running():
+        return "Error: loop de eventos no disponible."
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_ask_island_async(kind, input_data), _main_loop)
+        return fut.result(timeout=7.0)
+    except Exception as e:
+        return f"Error en puente con la Isla: {e}"
+
+import caf.tools as caf_tools
+caf_tools.set_island_ask_handler(_island_ask_sync_bridge)
+
+
 @app.on_event("startup")
 async def on_startup():
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     logger.info("FastAPI startup: warming up Caf voice engine with profile 'amiguito'...")
     asyncio.create_task(_parent_watchdog())
     try:
         await start_engine("amiguito")
     except Exception as e:
         logger.error(f"Failed to auto-start engine on startup: {e!r}")
+
 
 
 @app.get("/")
@@ -175,23 +256,157 @@ def get_audio_devices():
     current_in = getattr(engine, "input_device_index", None) if engine else cfg.get("input_device")
     current_out = getattr(engine, "output_device_index", None) if engine else cfg.get("output_device")
     headphones = getattr(engine, "headphones", False) if engine else cfg.get("headphones", False)
+    auto_hp = cfg.get("auto_headphones", True)
+    inputs_list = devices.get("inputs", [])
+    outputs_list = devices.get("outputs", [])
+    hp_in = next((d["index"] for d in inputs_list if any(w in d["name"].lower() for w in ("airpod", "auricular", "headphone", "headset", "buds", "hands-free"))), None)
+    hp_out = next((d["index"] for d in outputs_list if any(w in d["name"].lower() for w in ("airpod", "auricular", "headphone", "headset", "buds", "hands-free"))), None)
     return {
-        **devices,
+        "inputs": inputs_list,
+        "outputs": outputs_list,
+        "input_devices": inputs_list,
+        "output_devices": outputs_list,
+        "default_input": devices.get("default_input"),
+        "default_output": devices.get("default_output"),
         "current_input": current_in,
         "current_output": current_out,
+        "current_input_index": current_in,
+        "current_output_index": current_out,
         "headphones": headphones,
+        "auto_headphones": auto_hp,
+        "detected_headphones": {"input": hp_in, "output": hp_out},
     }
 
 
 @app.post("/audio/devices")
 async def set_audio_devices(payload: dict):
-    in_idx = payload.get("input_device")
-    out_idx = payload.get("output_device")
+    in_idx = payload.get("input_device") if "input_device" in payload else payload.get("input_device_index")
+    out_idx = payload.get("output_device") if "output_device" in payload else payload.get("output_device_index")
     headphones = payload.get("headphones")
-    save_audio_config(in_idx, out_idx, headphones)
+    auto_hp = payload.get("auto_headphones")
+    save_audio_config(in_idx, out_idx, headphones, auto_hp)
     if engine:
         engine.set_audio_devices(in_idx, out_idx, headphones)
     return {"status": "ok", "message": "Dispositivos de audio actualizados exitosamente."}
+
+
+@app.get("/config")
+def get_config():
+    profile = getattr(engine, "profile", None)
+    cur_voice = getattr(engine, "voice", "") or (getattr(profile, "voz", "Aoede") if profile else "Aoede")
+    cur_model = getattr(engine, "model", "") or "gemini-3.8-live"
+    cur_profile = getattr(profile, "nombre", "amiguito") if profile else "amiguito"
+    wake_en = getattr(engine, "wake_enabled", False)
+    headphones = getattr(engine, "headphones", False)
+    return {
+        "voice": cur_voice,
+        "model": cur_model,
+        "profile": cur_profile,
+        "wake_enabled": wake_en,
+        "headphones": headphones,
+        "available_voices": ["Aoede", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Zephyr"],
+        "available_models": [
+            {"id": "gemini-3.8-live", "name": "Gemini 3.8 Live (Predeterminado)", "desc": "Velocidad máxima, audio bidireccional fluido de menor latencia"},
+            {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash Live", "desc": "Ultrarrápido, versátil y equilibrado"},
+            {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro Live", "desc": "Máxima capacidad analítica para razonamiento profundo"},
+            {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash Live", "desc": "Ligero y de respuesta ágil"}
+        ],
+        "available_profiles": get_available_profiles(),
+    }
+
+
+@app.post("/config")
+async def update_config(payload: dict):
+    restart_needed = False
+    if "voice" in payload and payload["voice"]:
+        v = payload["voice"].strip()
+        cfg = {}
+        if CONFIG_PATH.exists():
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+        cfg["voice"] = v
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                yaml.safe_dump(cfg, f, default_flow_style=False)
+        except Exception as e:
+            logger.warning(f"No se pudo guardar voice en config.yaml: {e}")
+        if engine and getattr(engine, "voice", "") != v:
+            engine.voice = v
+            restart_needed = True
+
+    if "model" in payload and payload["model"]:
+        m = payload["model"].strip()
+        cfg = {}
+        if CONFIG_PATH.exists():
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+        cfg["model"] = m
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                yaml.safe_dump(cfg, f, default_flow_style=False)
+        except Exception as e:
+            logger.warning(f"No se pudo guardar model en config.yaml: {e}")
+        if engine and getattr(engine, "model", "") != m:
+            engine.model = m
+            restart_needed = True
+
+    if "wake_enabled" in payload and engine:
+        engine.wake_enabled = bool(payload["wake_enabled"])
+        if not engine.wake_enabled and engine.mode == "dormido":
+            engine.request_wake()
+
+    if "api_key" in payload and payload["api_key"]:
+        os.environ["GEMINI_API_KEY"] = payload["api_key"]
+        restart_needed = True
+
+    if restart_needed and engine:
+        cur_prof = getattr(engine.profile, "nombre", "amiguito")
+        await start_engine(cur_prof, force_restart=True)
+
+    return {"status": "ok", "message": "Configuración de Caf actualizada exitosamente."}
+
+
+@app.get("/stats")
+def get_stats():
+    from caf.stats import load_stats
+    from caf.memory import cargar_recuerdos
+    return {
+        "status": "ok",
+        "stats": load_stats(),
+        "memory_count": len(cargar_recuerdos())
+    }
+
+
+@app.get("/memory")
+def get_memory():
+    from caf.memory import cargar_recuerdos
+    return {"recuerdos": cargar_recuerdos()}
+
+
+@app.post("/memory")
+def add_memory(payload: dict):
+    from caf.memory import guardar_recuerdo, cargar_recuerdos
+    r = payload.get("recuerdo", "").strip()
+    if not r:
+        return {"status": "error", "message": "Falta el texto a recordar."}
+    res = guardar_recuerdo(r)
+    return {"status": "ok", "message": res, "recuerdos": cargar_recuerdos()}
+
+
+@app.delete("/memory")
+def delete_memory(payload: dict):
+    from caf.memory import olvidar_recuerdo, cargar_recuerdos
+    r = payload.get("recuerdo", "").strip()
+    if not r:
+        return {"status": "error", "message": "Falta el texto a olvidar."}
+    res = olvidar_recuerdo(r)
+    return {"status": "ok", "message": res, "recuerdos": cargar_recuerdos()}
 
 
 @app.post("/shutdown")
@@ -204,7 +419,8 @@ async def shutdown():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    logger.info("WebSocket connected.")
+    _connected_websockets.add(websocket)
+    logger.info(f"WebSocket connected. Total activos: {len(_connected_websockets)}")
 
     if engine is None or not engine.is_running:
         try:
@@ -240,8 +456,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     engine.request_sleep()
                 elif action in ("silenciar", "activar") and engine:
                     engine.muted = action == "silenciar"
+                elif action == "island_reply":
+                    req_id = msg.get("id")
+                    fut = _pending_island_asks.get(req_id)
+                    if fut and not fut.done():
+                        fut.set_result(str(msg.get("result", "")))
         except WebSocketDisconnect:
-            logger.info("WebSocket disconnected.")
+            pass
         except Exception as e:
             logger.error(f"WS receive error: {e!r}")
 
@@ -254,12 +475,16 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             logger.error(f"WS send error: {e!r}")
 
-    recv_task = asyncio.create_task(receive_from_ws())
-    send_task = asyncio.create_task(send_to_ws())
-    done, pending = await asyncio.wait([recv_task, send_task], return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    logger.info("WebSocket connection closed.")
+    try:
+        recv_task = asyncio.create_task(receive_from_ws())
+        send_task = asyncio.create_task(send_to_ws())
+        done, pending = await asyncio.wait([recv_task, send_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+    finally:
+        _connected_websockets.discard(websocket)
+        logger.info(f"WebSocket connection closed. Total activos restantes: {len(_connected_websockets)}")
+
 
 
 if __name__ == "__main__":

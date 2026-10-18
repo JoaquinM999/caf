@@ -94,8 +94,13 @@ pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)
 }
 
-/// Nothing to set up before the webview starts.
-pub fn prepare_environment() {}
+/// Ensures the process is attached to the interactive "Default" desktop before
+/// any Win32 window or WebView2 environment is created, and logs any panic to coucou.log.
+pub fn prepare_environment() {
+    std::panic::set_hook(Box::new(|info| {
+        crate::log::line(format!("PANIC: {info}"));
+    }));
+}
 
 pub fn local_time() -> LocalTime {
     let t = unsafe { GetLocalTime() };

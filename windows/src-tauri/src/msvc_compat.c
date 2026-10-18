@@ -1,5 +1,6 @@
 // MSVC compatibility stubs for Visual Studio 2022 STL vector algorithms
 // when building on environments with Visual Studio 2019 MSVC runtimes.
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -9,66 +10,66 @@ struct PtrPair {
     const void* p2;
 };
 
-const void* __std_find_trivial_1(const void* first, const void* last, unsigned char val) {
-    const unsigned char* f = (const unsigned char*)first;
-    const unsigned char* l = (const unsigned char*)last;
+const void* __std_find_trivial_1(const void* first, const void* last, uint8_t val) {
+    const uint8_t* f = (const uint8_t*)first;
+    const uint8_t* l = (const uint8_t*)last;
     for (; f != l; ++f) {
         if (*f == val) return f;
     }
     return l;
 }
 
-const void* __std_find_trivial_2(const void* first, const void* last, unsigned short val) {
-    const unsigned short* f = (const unsigned short*)first;
-    const unsigned short* l = (const unsigned short*)last;
+const void* __std_find_trivial_2(const void* first, const void* last, uint16_t val) {
+    const uint16_t* f = (const uint16_t*)first;
+    const uint16_t* l = (const uint16_t*)last;
     for (; f != l; ++f) {
         if (*f == val) return f;
     }
     return l;
 }
 
-const void* __std_find_trivial_4(const void* first, const void* last, unsigned int val) {
-    const unsigned int* f = (const unsigned int*)first;
-    const unsigned int* l = (const unsigned int*)last;
+const void* __std_find_trivial_4(const void* first, const void* last, uint32_t val) {
+    const uint32_t* f = (const uint32_t*)first;
+    const uint32_t* l = (const uint32_t*)last;
     for (; f != l; ++f) {
         if (*f == val) return f;
     }
     return l;
 }
 
-const void* __std_find_trivial_8(const void* first, const void* last, unsigned long long val) {
-    const unsigned long long* f = (const unsigned long long*)first;
-    const unsigned long long* l = (const unsigned long long*)last;
+const void* __std_find_trivial_8(const void* first, const void* last, uint64_t val) {
+    const uint64_t* f = (const uint64_t*)first;
+    const uint64_t* l = (const uint64_t*)last;
     for (; f != l; ++f) {
         if (*f == val) return f;
     }
     return l;
 }
 
-const void* __std_find_last_trivial_1(const void* first, const void* last, unsigned char val) {
-    const unsigned char* f = (const unsigned char*)first;
-    const unsigned char* l = (const unsigned char*)last;
+const void* __std_find_last_trivial_1(const void* first, const void* last, uint8_t val) {
+    const uint8_t* f = (const uint8_t*)first;
+    const uint8_t* l = (const uint8_t*)last;
     while (l != f) {
         --l;
         if (*l == val) return l;
     }
-    return (const unsigned char*)last;
+    return (const uint8_t*)last;
 }
 
-const void* __std_find_last_trivial_2(const void* first, const void* last, unsigned short val) {
-    const unsigned short* f = (const unsigned short*)first;
-    const unsigned short* l = (const unsigned short*)last;
+const void* __std_find_last_trivial_2(const void* first, const void* last, uint16_t val) {
+    const uint16_t* f = (const uint16_t*)first;
+    const uint16_t* l = (const uint16_t*)last;
     while (l != f) {
         --l;
         if (*l == val) return l;
     }
-    return (const unsigned short*)last;
+    return (const uint16_t*)last;
 }
 
-void* __std_remove_1(void* first, void* last, unsigned char val) {
-    unsigned char* f = (unsigned char*)first;
-    unsigned char* l = (unsigned char*)last;
-    unsigned char* out = f;
+void* __std_remove_1(void* first, void* last, uint8_t val) {
+    uint8_t* f = (uint8_t*)first;
+    uint8_t* l = (uint8_t*)last;
+    uint8_t* out = f;
     for (; f != l; ++f) {
         if (*f != val) {
             *out++ = *f;
@@ -77,10 +78,10 @@ void* __std_remove_1(void* first, void* last, unsigned char val) {
     return out;
 }
 
-void* __std_remove_2(void* first, void* last, unsigned short val) {
-    unsigned short* f = (unsigned short*)first;
-    unsigned short* l = (unsigned short*)last;
-    unsigned short* out = f;
+void* __std_remove_2(void* first, void* last, uint16_t val) {
+    uint16_t* f = (uint16_t*)first;
+    uint16_t* l = (uint16_t*)last;
+    uint16_t* out = f;
     for (; f != l; ++f) {
         if (*f != val) {
             *out++ = *f;
@@ -89,10 +90,10 @@ void* __std_remove_2(void* first, void* last, unsigned short val) {
     return out;
 }
 
-void* __std_remove_8(void* first, void* last, unsigned long long val) {
-    unsigned long long* f = (unsigned long long*)first;
-    unsigned long long* l = (unsigned long long*)last;
-    unsigned long long* out = f;
+void* __std_remove_8(void* first, void* last, uint64_t val) {
+    uint64_t* f = (uint64_t*)first;
+    uint64_t* l = (uint64_t*)last;
+    uint64_t* out = f;
     for (; f != l; ++f) {
         if (*f != val) {
             *out++ = *f;
@@ -101,9 +102,9 @@ void* __std_remove_8(void* first, void* last, unsigned long long val) {
     return out;
 }
 
-size_t __std_count_trivial_4(const void* first, const void* last, unsigned int val) {
-    const unsigned int* f = (const unsigned int*)first;
-    const unsigned int* l = (const unsigned int*)last;
+size_t __std_count_trivial_4(const void* first, const void* last, uint32_t val) {
+    const uint32_t* f = (const uint32_t*)first;
+    const uint32_t* l = (const uint32_t*)last;
     size_t count = 0;
     for (; f != l; ++f) {
         if (*f == val) ++count;
@@ -111,9 +112,9 @@ size_t __std_count_trivial_4(const void* first, const void* last, unsigned int v
     return count;
 }
 
-size_t __std_count_trivial_8(const void* first, const void* last, unsigned long long val) {
-    const unsigned long long* f = (const unsigned long long*)first;
-    const unsigned long long* l = (const unsigned long long*)last;
+size_t __std_count_trivial_8(const void* first, const void* last, uint64_t val) {
+    const uint64_t* f = (const uint64_t*)first;
+    const uint64_t* l = (const uint64_t*)last;
     size_t count = 0;
     for (; f != l; ++f) {
         if (*f == val) ++count;
@@ -121,16 +122,29 @@ size_t __std_count_trivial_8(const void* first, const void* last, unsigned long 
     return count;
 }
 
-const void* __std_min_element_4(const int* first, const int* last) {
+const void* __std_min_element_4(const void* first, const void* last, bool is_signed) {
     if (first == last) return first;
-    const int* best = first;
-    for (++first; first != last; ++first) {
-        if (*first < *best) best = first;
+    if (is_signed) {
+        const int32_t* f = (const int32_t*)first;
+        const int32_t* l = (const int32_t*)last;
+        const int32_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f < *best) best = f;
+        }
+        return best;
+    } else {
+        const uint32_t* f = (const uint32_t*)first;
+        const uint32_t* l = (const uint32_t*)last;
+        const uint32_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f < *best) best = f;
+        }
+        return best;
     }
-    return best;
 }
 
-const void* __std_min_element_d(const double* first, const double* last) {
+const void* __std_min_element_d(const double* first, const double* last, bool unused) {
+    (void)unused;
     if (first == last) return first;
     const double* best = first;
     for (++first; first != last; ++first) {
@@ -139,7 +153,8 @@ const void* __std_min_element_d(const double* first, const double* last) {
     return best;
 }
 
-const void* __std_min_element_f(const float* first, const float* last) {
+const void* __std_min_element_f(const float* first, const float* last, bool unused) {
+    (void)unused;
     if (first == last) return first;
     const float* best = first;
     for (++first; first != last; ++first) {
@@ -148,34 +163,71 @@ const void* __std_min_element_f(const float* first, const float* last) {
     return best;
 }
 
-const void* __std_max_element_1(const unsigned char* first, const unsigned char* last) {
+const void* __std_max_element_1(const void* first, const void* last, bool is_signed) {
     if (first == last) return first;
-    const unsigned char* best = first;
-    for (++first; first != last; ++first) {
-        if (*first > *best) best = first;
+    if (is_signed) {
+        const int8_t* f = (const int8_t*)first;
+        const int8_t* l = (const int8_t*)last;
+        const int8_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f > *best) best = f;
+        }
+        return best;
+    } else {
+        const uint8_t* f = (const uint8_t*)first;
+        const uint8_t* l = (const uint8_t*)last;
+        const uint8_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f > *best) best = f;
+        }
+        return best;
     }
-    return best;
 }
 
-const void* __std_max_element_4(const int* first, const int* last) {
+const void* __std_max_element_4(const void* first, const void* last, bool is_signed) {
     if (first == last) return first;
-    const int* best = first;
-    for (++first; first != last; ++first) {
-        if (*first > *best) best = first;
+    if (is_signed) {
+        const int32_t* f = (const int32_t*)first;
+        const int32_t* l = (const int32_t*)last;
+        const int32_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f > *best) best = f;
+        }
+        return best;
+    } else {
+        const uint32_t* f = (const uint32_t*)first;
+        const uint32_t* l = (const uint32_t*)last;
+        const uint32_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f > *best) best = f;
+        }
+        return best;
     }
-    return best;
 }
 
-const void* __std_max_element_8(const long long* first, const long long* last) {
+const void* __std_max_element_8(const void* first, const void* last, bool is_signed) {
     if (first == last) return first;
-    const long long* best = first;
-    for (++first; first != last; ++first) {
-        if (*first > *best) best = first;
+    if (is_signed) {
+        const int64_t* f = (const int64_t*)first;
+        const int64_t* l = (const int64_t*)last;
+        const int64_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f > *best) best = f;
+        }
+        return best;
+    } else {
+        const uint64_t* f = (const uint64_t*)first;
+        const uint64_t* l = (const uint64_t*)last;
+        const uint64_t* best = f;
+        for (++f; f != l; ++f) {
+            if (*f > *best) best = f;
+        }
+        return best;
     }
-    return best;
 }
 
-const void* __std_max_element_d(const double* first, const double* last) {
+const void* __std_max_element_d(const double* first, const double* last, bool unused) {
+    (void)unused;
     if (first == last) return first;
     const double* best = first;
     for (++first; first != last; ++first) {
@@ -184,7 +236,8 @@ const void* __std_max_element_d(const double* first, const double* last) {
     return best;
 }
 
-const void* __std_max_element_f(const float* first, const float* last) {
+const void* __std_max_element_f(const float* first, const float* last, bool unused) {
+    (void)unused;
     if (first == last) return first;
     const float* best = first;
     for (++first; first != last; ++first) {
@@ -193,59 +246,73 @@ const void* __std_max_element_f(const float* first, const float* last) {
     return best;
 }
 
-const void* __std_max_4i(const int* first, const int* last) {
-    return __std_max_element_4(first, last);
-}
-
-const void* __std_search_1(const unsigned char* first1, const unsigned char* last1, const unsigned char* first2, const unsigned char* last2) {
-    size_t len2 = (size_t)(last2 - first2);
-    if (len2 == 0) return first1;
-    size_t len1 = (size_t)(last1 - first1);
-    if (len1 < len2) return last1;
-    for (; first1 + len2 <= last1; ++first1) {
-        if (memcmp(first1, first2, len2) == 0) return first1;
+int32_t __std_max_4i(const void* first, const void* last) {
+    const int32_t* f = (const int32_t*)first;
+    const int32_t* l = (const int32_t*)last;
+    int32_t best = *f;
+    for (++f; f != l; ++f) {
+        if (*f > best) best = *f;
     }
-    return last1;
+    return best;
 }
 
-const void* __std_search_2(const unsigned short* first1, const unsigned short* last1, const unsigned short* first2, const unsigned short* last2) {
-    size_t len2 = (size_t)(last2 - first2);
-    if (len2 == 0) return first1;
-    size_t len1 = (size_t)(last1 - first1);
-    if (len1 < len2) return last1;
-    for (; first1 + len2 <= last1; ++first1) {
-        if (memcmp(first1, first2, len2 * sizeof(unsigned short)) == 0) return first1;
+const void* __std_search_1(const void* first1, const void* last1, const void* first2, size_t count2) {
+    const uint8_t* f1 = (const uint8_t*)first1;
+    const uint8_t* l1 = (const uint8_t*)last1;
+    const uint8_t* f2 = (const uint8_t*)first2;
+    if (count2 == 0) return f1;
+    size_t len1 = (size_t)(l1 - f1);
+    if (len1 < count2) return l1;
+    for (; f1 + count2 <= l1; ++f1) {
+        if (memcmp(f1, f2, count2) == 0) return f1;
     }
-    return last1;
+    return l1;
 }
 
-const void* __std_find_end_1(const unsigned char* first1, const unsigned char* last1, const unsigned char* first2, const unsigned char* last2) {
-    size_t len2 = (size_t)(last2 - first2);
-    if (len2 == 0) return last1;
-    size_t len1 = (size_t)(last1 - first1);
-    if (len1 < len2) return last1;
-    const unsigned char* res = last1;
-    for (; first1 + len2 <= last1; ++first1) {
-        if (memcmp(first1, first2, len2) == 0) res = first1;
+const void* __std_search_2(const void* first1, const void* last1, const void* first2, size_t count2) {
+    const uint16_t* f1 = (const uint16_t*)first1;
+    const uint16_t* l1 = (const uint16_t*)last1;
+    const uint16_t* f2 = (const uint16_t*)first2;
+    if (count2 == 0) return f1;
+    size_t len1 = (size_t)(l1 - f1);
+    if (len1 < count2) return l1;
+    for (; f1 + count2 <= l1; ++f1) {
+        if (memcmp(f1, f2, count2 * sizeof(uint16_t)) == 0) return f1;
+    }
+    return l1;
+}
+
+const void* __std_find_end_1(const void* first1, const void* last1, const void* first2, size_t count2) {
+    const uint8_t* f1 = (const uint8_t*)first1;
+    const uint8_t* l1 = (const uint8_t*)last1;
+    const uint8_t* f2 = (const uint8_t*)first2;
+    if (count2 == 0) return l1;
+    size_t len1 = (size_t)(l1 - f1);
+    if (len1 < count2) return l1;
+    const uint8_t* res = l1;
+    for (; f1 + count2 <= l1; ++f1) {
+        if (memcmp(f1, f2, count2) == 0) res = f1;
     }
     return res;
 }
 
-const void* __std_find_end_2(const unsigned short* first1, const unsigned short* last1, const unsigned short* first2, const unsigned short* last2) {
-    size_t len2 = (size_t)(last2 - first2);
-    if (len2 == 0) return last1;
-    size_t len1 = (size_t)(last1 - first1);
-    if (len1 < len2) return last1;
-    const unsigned short* res = last1;
-    for (; first1 + len2 <= last1; ++first1) {
-        if (memcmp(first1, first2, len2 * sizeof(unsigned short)) == 0) res = first1;
+const void* __std_find_end_2(const void* first1, const void* last1, const void* first2, size_t count2) {
+    const uint16_t* f1 = (const uint16_t*)first1;
+    const uint16_t* l1 = (const uint16_t*)last1;
+    const uint16_t* f2 = (const uint16_t*)first2;
+    if (count2 == 0) return l1;
+    size_t len1 = (size_t)(l1 - f1);
+    if (len1 < count2) return l1;
+    const uint16_t* res = l1;
+    for (; f1 + count2 <= l1; ++f1) {
+        if (memcmp(f1, f2, count2 * sizeof(uint16_t)) == 0) res = f1;
     }
     return res;
 }
 
 size_t __std_find_first_of_trivial_pos_1(const void* h, size_t h_size, const void* n, size_t n_size) {
-    const unsigned char* hay = (const unsigned char*)h;
-    const unsigned char* ndl = (const unsigned char*)n;
+    const uint8_t* hay = (const uint8_t*)h;
+    const uint8_t* ndl = (const uint8_t*)n;
     for (size_t i = 0; i < h_size; ++i) {
         for (size_t j = 0; j < n_size; ++j) {
             if (hay[i] == ndl[j]) return i;
@@ -255,8 +322,8 @@ size_t __std_find_first_of_trivial_pos_1(const void* h, size_t h_size, const voi
 }
 
 size_t __std_find_first_of_trivial_pos_2(const void* h, size_t h_size, const void* n, size_t n_size) {
-    const unsigned short* hay = (const unsigned short*)h;
-    const unsigned short* ndl = (const unsigned short*)n;
+    const uint16_t* hay = (const uint16_t*)h;
+    const uint16_t* ndl = (const uint16_t*)n;
     for (size_t i = 0; i < h_size; ++i) {
         for (size_t j = 0; j < n_size; ++j) {
             if (hay[i] == ndl[j]) return i;
@@ -266,8 +333,8 @@ size_t __std_find_first_of_trivial_pos_2(const void* h, size_t h_size, const voi
 }
 
 size_t __std_find_last_of_trivial_pos_1(const void* h, size_t h_size, const void* n, size_t n_size) {
-    const unsigned char* hay = (const unsigned char*)h;
-    const unsigned char* ndl = (const unsigned char*)n;
+    const uint8_t* hay = (const uint8_t*)h;
+    const uint8_t* ndl = (const uint8_t*)n;
     for (size_t i = h_size; i > 0; --i) {
         for (size_t j = 0; j < n_size; ++j) {
             if (hay[i - 1] == ndl[j]) return i - 1;
@@ -277,8 +344,8 @@ size_t __std_find_last_of_trivial_pos_1(const void* h, size_t h_size, const void
 }
 
 size_t __std_find_last_of_trivial_pos_2(const void* h, size_t h_size, const void* n, size_t n_size) {
-    const unsigned short* hay = (const unsigned short*)h;
-    const unsigned short* ndl = (const unsigned short*)n;
+    const uint16_t* hay = (const uint16_t*)h;
+    const uint16_t* ndl = (const uint16_t*)n;
     for (size_t i = h_size; i > 0; --i) {
         for (size_t j = 0; j < n_size; ++j) {
             if (hay[i - 1] == ndl[j]) return i - 1;
@@ -287,50 +354,76 @@ size_t __std_find_last_of_trivial_pos_2(const void* h, size_t h_size, const void
     return (size_t)-1;
 }
 
-struct PtrPair __std_minmax_element_4(const int* first, const int* last) {
+struct PtrPair __std_minmax_element_4(const void* first, const void* last, bool is_signed) {
     struct PtrPair res;
     if (first == last) { res.p1 = first; res.p2 = first; return res; }
-    const int* min_p = first;
-    const int* max_p = first;
-    for (++first; first != last; ++first) {
-        if (*first < *min_p) min_p = first;
-        if (*first > *max_p) max_p = first;
+    if (is_signed) {
+        const int32_t* f = (const int32_t*)first;
+        const int32_t* l = (const int32_t*)last;
+        const int32_t* min_p = f;
+        const int32_t* max_p = f;
+        for (++f; f != l; ++f) {
+            if (*f < *min_p) min_p = f;
+            else if (*f >= *max_p) max_p = f;
+        }
+        res.p1 = min_p; res.p2 = max_p;
+    } else {
+        const uint32_t* f = (const uint32_t*)first;
+        const uint32_t* l = (const uint32_t*)last;
+        const uint32_t* min_p = f;
+        const uint32_t* max_p = f;
+        for (++f; f != l; ++f) {
+            if (*f < *min_p) min_p = f;
+            else if (*f >= *max_p) max_p = f;
+        }
+        res.p1 = min_p; res.p2 = max_p;
     }
-    res.p1 = min_p; res.p2 = max_p;
     return res;
 }
 
-struct PtrPair __std_minmax_element_8(const long long* first, const long long* last) {
+struct PtrPair __std_minmax_element_8(const void* first, const void* last, bool is_signed) {
     struct PtrPair res;
     if (first == last) { res.p1 = first; res.p2 = first; return res; }
-    const long long* min_p = first;
-    const long long* max_p = first;
-    for (++first; first != last; ++first) {
-        if (*first < *min_p) min_p = first;
-        if (*first > *max_p) max_p = first;
+    if (is_signed) {
+        const int64_t* f = (const int64_t*)first;
+        const int64_t* l = (const int64_t*)last;
+        const int64_t* min_p = f;
+        const int64_t* max_p = f;
+        for (++f; f != l; ++f) {
+            if (*f < *min_p) min_p = f;
+            else if (*f >= *max_p) max_p = f;
+        }
+        res.p1 = min_p; res.p2 = max_p;
+    } else {
+        const uint64_t* f = (const uint64_t*)first;
+        const uint64_t* l = (const uint64_t*)last;
+        const uint64_t* min_p = f;
+        const uint64_t* max_p = f;
+        for (++f; f != l; ++f) {
+            if (*f < *min_p) min_p = f;
+            else if (*f >= *max_p) max_p = f;
+        }
+        res.p1 = min_p; res.p2 = max_p;
     }
-    res.p1 = min_p; res.p2 = max_p;
     return res;
 }
 
-struct PtrPair __std_mismatch_1(const unsigned char* first1, const unsigned char* last1, const unsigned char* first2, const unsigned char* last2) {
-    struct PtrPair res;
-    while (first1 != last1 && first2 != last2 && *first1 == *first2) {
-        ++first1;
-        ++first2;
+size_t __std_mismatch_1(const void* first1, const void* first2, size_t count) {
+    const uint8_t* f1 = (const uint8_t*)first1;
+    const uint8_t* f2 = (const uint8_t*)first2;
+    for (size_t i = 0; i < count; ++i) {
+        if (f1[i] != f2[i]) return i;
     }
-    res.p1 = first1; res.p2 = first2;
-    return res;
+    return count;
 }
 
-struct PtrPair __std_mismatch_8(const unsigned long long* first1, const unsigned long long* last1, const unsigned long long* first2, const unsigned long long* last2) {
-    struct PtrPair res;
-    while (first1 != last1 && first2 != last2 && *first1 == *first2) {
-        ++first1;
-        ++first2;
+size_t __std_mismatch_8(const void* first1, const void* first2, size_t count) {
+    const uint64_t* f1 = (const uint64_t*)first1;
+    const uint64_t* f2 = (const uint64_t*)first2;
+    for (size_t i = 0; i < count; ++i) {
+        if (f1[i] != f2[i]) return i;
     }
-    res.p1 = first1; res.p2 = first2;
-    return res;
+    return count;
 }
 
 void __std_init_once_link_alternate_names_and_abort(void) {}

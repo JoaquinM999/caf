@@ -4,3 +4,13 @@ design/** linguist-documentation
 android/gradlew text eol=lf
 android/**/*.sh text eol=lf
 android/**/*.mjs text eol=lf
+
+# Caf voice assistant custom files - protect against upstream merges
+backend/** merge=ours
+windows/src/hub/pages/caf-voice.ts merge=ours
+windows/src/core/cafClient.ts merge=ours
+windows/src-tauri/src/backend.rs merge=ours
+windows/src-tauri/src/msvc_compat.c merge=ours
+windows/src-tauri/src/msvc_compat_tables.cpp merge=ours
+sync-upstream.ps1 merge=ours
+coucou-backend-x86_64-pc-windows-msvc.spec merge=ours

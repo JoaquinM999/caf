@@ -109,15 +109,19 @@ function info(): string {
   });
 }
 
+export function handleIslandVoiceAsk(kind: "pills" | "info", input?: Ask["input"]): string {
+  try {
+    return kind === "pills" ? pills(input ?? {}) : info();
+  } catch (err) {
+    return `error: ${String(err)}`;
+  }
+}
+
 export function registerVoiceHandlers() {
   if (!IS_TAURI) return;
   void onEvent<Ask>("voice-ask", (ask) => {
-    let text: string;
-    try {
-      text = ask.kind === "pills" ? pills(ask.input ?? {}) : info();
-    } catch (err) {
-      text = `error: ${String(err)}`;
-    }
+    const text = handleIslandVoiceAsk(ask.kind, ask.input);
     void invoke("voice_done", { id: ask.id, text }).catch(() => {});
   });
 }
+

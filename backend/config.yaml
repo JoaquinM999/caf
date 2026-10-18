@@ -1,10 +1,17 @@
+audio:
+  auto_headphones: true
+  headphones: false
+  input_device: 1
+  output_device: 9
+model: gemini-2.5-flash
 programas:
+  administrador de tareas: taskmgr.exe
   bloc de notas: notepad.exe
   calculadora: calc.exe
-  spotify: explorer.exe shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify
   chrome: Start-Process chrome
-  google chrome: Start-Process chrome
-  navegador: Start-Process chrome
   edge: Start-Process msedge
   explorador de archivos: explorer.exe
-  administrador de tareas: taskmgr.exe
+  google chrome: Start-Process chrome
+  navegador: Start-Process chrome
+  spotify: explorer.exe shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify
+voice: Puck

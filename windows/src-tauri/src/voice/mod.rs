@@ -21,7 +21,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
@@ -29,7 +29,7 @@ use crate::flow::pill;
 use crate::speech::{self, audio};
 
 /// What the pill shows of a conversation.
-#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceView {
     /// "listening", "thinking", "speaking".
@@ -53,10 +53,11 @@ fn pending() -> &'static Mutex<HashMap<u64, mpsc::Sender<String>>> {
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Whether « OK Coucou » can run: the voice model and a Claude key.
+/// Whether « OK Coucou » can run: permanently disabled in favor of Caf (Gemini Live).
 pub fn requirements_met() -> bool {
-    speech::is_ready() && crate::secrets::present(crate::claude::KEY)
+    false
 }
+
 
 /// Starts or stops listening to follow the preference.
 pub fn sync(app: &AppHandle) {
@@ -257,8 +258,14 @@ fn speak(app: &AppHandle, text: &str) {
 }
 
 /// The pill says it has finished speaking (`id`), or the island answers a question.
+/// When id == 0, Caf updates the bottom voice pill view directly.
 #[tauri::command]
-pub fn voice_done(id: u64, text: Option<String>) {
+pub fn voice_done(app: AppHandle, id: u64, text: Option<String>) {
+    if id == 0 {
+        let view: Option<VoiceView> = text.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        show(&app, view);
+        return;
+    }
     if let Some(tx) = pending().lock().unwrap().remove(&id) {
         let _ = tx.send(text.unwrap_or_default());
     }

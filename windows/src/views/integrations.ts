@@ -446,10 +446,15 @@ export function hasIntegrationData(id: string): boolean {
 }
 
 interface AudioDevicesResponse {
-  input_devices: { index: number; name: string }[];
-  output_devices: { index: number; name: string }[];
-  current_input_index: number | null;
-  current_output_index: number | null;
+  input_devices?: { index: number; name: string }[];
+  output_devices?: { index: number; name: string }[];
+  inputs?: { index: number; name: string }[];
+  outputs?: { index: number; name: string }[];
+  current_input_index?: number | null;
+  current_output_index?: number | null;
+  current_input?: number | null;
+  current_output?: number | null;
+  headphones?: boolean;
 }
 
 let cachedAudioDevices: AudioDevicesResponse | null = null;
@@ -482,51 +487,61 @@ function buildCafAudioSection(): HTMLElement {
   });
 
   function populate(data: AudioDevicesResponse) {
+    const inList = data.input_devices ?? data.inputs ?? [];
+    const outList = data.output_devices ?? data.outputs ?? [];
+    const curIn = data.current_input_index !== undefined ? data.current_input_index : (data.current_input ?? null);
+    const curOut = data.current_output_index !== undefined ? data.current_output_index : (data.current_output ?? null);
+
     clear(micSelect);
-    const defIn = h("option", { value: "-1", text: "🎙️ Micrófono Predeterminado del Sistema" });
+    const defIn = h("option", { value: "-1", text: "🎙️ Micrófono Predeterminado del Sistema" }) as HTMLOptionElement;
     micSelect.append(defIn);
-    for (const d of data.input_devices) {
+    for (const d of inList) {
       const opt = h("option", { value: String(d.index), text: d.name }) as HTMLOptionElement;
-      if (data.current_input_index === d.index) opt.selected = true;
+      if (curIn === d.index) opt.selected = true;
       micSelect.append(opt);
     }
-    if (data.current_input_index === null || data.current_input_index === undefined) {
+    if (curIn === null || curIn === undefined) {
       defIn.selected = true;
     }
 
     clear(speakerSelect);
-    const defOut = h("option", { value: "-1", text: "🔊 Altavoz Predeterminado del Sistema" });
+    const defOut = h("option", { value: "-1", text: "🔊 Altavoz Predeterminado del Sistema" }) as HTMLOptionElement;
     speakerSelect.append(defOut);
-    for (const d of data.output_devices) {
+    for (const d of outList) {
       const opt = h("option", { value: String(d.index), text: d.name }) as HTMLOptionElement;
-      if (data.current_output_index === d.index) opt.selected = true;
+      if (curOut === d.index) opt.selected = true;
       speakerSelect.append(opt);
     }
-    if (data.current_output_index === null || data.current_output_index === undefined) {
+    if (curOut === null || curOut === undefined) {
       defOut.selected = true;
     }
 
     // Check if AirPods / Headphones exist in list
-    const hpOut = data.output_devices.find(d => /airpods|auricular|headphone|headset/i.test(d.name));
-    const hpIn = data.input_devices.find(d => /airpods|auricular|headphone|headset/i.test(d.name));
+    const hpOut = outList.find(d => /airpods|auricular|headphone|headset/i.test(d.name));
+    const hpIn = inList.find(d => /airpods|auricular|headphone|headset/i.test(d.name));
     if (hpOut) {
       quickHeadphonesBtn.style.display = "flex";
       quickHeadphonesBtn.onclick = () => {
         if (hpIn) micSelect.value = String(hpIn.index);
         speakerSelect.value = String(hpOut.index);
-        void saveAudioSelection();
+        void saveAudioSelection(true);
       };
     }
   }
 
-  async function saveAudioSelection() {
+  async function saveAudioSelection(forceHeadphones?: boolean) {
     statusSpan.textContent = "Guardando...";
     statusSpan.style.color = "#38BDF8";
     const inVal = parseInt(micSelect.value, 10);
     const outVal = parseInt(speakerSelect.value, 10);
+    const selectedOutText = speakerSelect.options[speakerSelect.selectedIndex]?.text ?? "";
+    const isHp = forceHeadphones ?? /airpods|auricular|headphone|headset/i.test(selectedOutText);
     const payload = {
       input_device_index: inVal >= 0 ? inVal : null,
       output_device_index: outVal >= 0 ? outVal : null,
+      input_device: inVal >= 0 ? inVal : null,
+      output_device: outVal >= 0 ? outVal : null,
+      headphones: isHp,
     };
     try {
       const res = await fetch("http://127.0.0.1:8000/audio/devices", {
@@ -540,6 +555,8 @@ function buildCafAudioSection(): HTMLElement {
         if (cachedAudioDevices) {
           cachedAudioDevices.current_input_index = payload.input_device_index;
           cachedAudioDevices.current_output_index = payload.output_device_index;
+          cachedAudioDevices.current_input = payload.input_device;
+          cachedAudioDevices.current_output = payload.output_device;
         }
         setTimeout(() => { statusSpan.textContent = ""; }, 2500);
       } else {

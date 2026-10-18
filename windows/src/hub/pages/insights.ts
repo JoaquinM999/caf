@@ -18,6 +18,25 @@ function duration(minutes: number): string {
 
 export async function insightsPage(page: HTMLElement, ctx: HubContext) {
   const stats: FlowStats | null = await FlowBridge.stats();
+  let cafStats: {
+    total_conversations?: number;
+    total_user_words?: number;
+    total_caf_words?: number;
+    total_seconds_talked?: number;
+    tools_used?: Record<string, number>;
+    daily?: Record<string, number>;
+    memory_count?: number;
+  } | null = null;
+
+  try {
+    const res = await fetch("http://127.0.0.1:8000/stats");
+    if (res.ok) {
+      const data = await res.json();
+      cafStats = data.stats || {};
+      if (cafStats) cafStats.memory_count = data.memory_count || 0;
+    }
+  } catch {}
+
   let period: Period = "month";
   const body = h("div", { style: "display:flex;flex-direction:column;gap:14px" });
   const picker = segmented<Period>([["week", t("Week")], ["month", t("Month")], ["all", t("All")]], period, (p) => {
@@ -72,6 +91,59 @@ export async function insightsPage(page: HTMLElement, ctx: HubContext) {
       }
     }
     body.append(h("div", { class: "hub-chart-row" }, chart, appsCard));
+
+    // ── Sección Caf: Asistente de Voz en Vivo ──────────────────────────────────
+    const cafTotalConvs = cafStats?.total_conversations ?? 0;
+    const cafWords = cafStats?.total_caf_words ?? 0;
+    const userWords = cafStats?.total_user_words ?? 0;
+    const memoryCount = cafStats?.memory_count ?? 0;
+    const toolsUsed = cafStats?.tools_used ?? {};
+    const totalTools = Object.values(toolsUsed).reduce((a, b) => a + Number(b), 0);
+
+    const cafHeader = h("div", { style: "display:flex;align-items:center;justify-content:space-between;margin-top:10px;margin-bottom:-4px;" },
+      h("div", { style: "font:700 15px var(--font);color:var(--ink);letter-spacing:-0.2px;", text: "Asistente de Voz (Caf)" }),
+      h("span", { class: "hub-badge on", style: "font-size:11px;color:var(--hub-green);", text: "● Gemini Live" })
+    );
+
+    const cafStatsRow = h("div", { class: "hub-stat-row" },
+      stat("Charlas con Caf", number(cafTotalConvs), "sesiones de diálogo"),
+      stat("Palabras de Caf", shortCount(cafWords), `tú hablaste ${shortCount(userWords)} palabras`),
+      stat("Acciones ejecutadas", number(totalTools), "Spotify, web, mails, etc."),
+      stat("Recuerdos activos", number(memoryCount), "en memoria persistente")
+    );
+
+    const toolLabels: Record<string, string> = {
+      spotify: "Control de Spotify",
+      buscar_web: "Búsquedas web",
+      preparar_email: "Mails redactados",
+      recordar: "Memoria permanente",
+      coucou_pills: "Pills de la Isla",
+      abrir_programa: "Programas abiertos",
+      otros: "Otras acciones"
+    };
+
+    const toolEntries = Object.entries(toolsUsed)
+      .filter(([, count]) => Number(count) > 0)
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+
+    const toolsCard = h("div", { class: "hub-card" },
+      h("div", { class: "title", style: "font:700 14px var(--font);margin-bottom:8px;", text: "Herramientas más usadas por Caf" })
+    );
+
+    if (toolEntries.length === 0) {
+      toolsCard.append(emptyState("Habla con Caf o pídele acciones y aparecerán aquí.", "idle"));
+    } else {
+      for (const [cat, count] of toolEntries) {
+        const share = totalTools > 0 ? Number(count) / totalTools : 0;
+        const name = toolLabels[cat] || cat;
+        toolsCard.append(h("div", { class: "hub-app-bar" },
+          h("div", { class: "top" }, h("b", { text: name, style: "font-weight:500" }), h("span", { text: `${number(Number(count))} (${Math.round(share * 100)} %)` })),
+          h("div", { class: "track" }, h("i", { style: `width:${Math.max(3, share * 100)}%;background:var(--hub-green);` }))
+        ));
+      }
+    }
+
+    body.append(cafHeader, cafStatsRow, toolsCard);
     body.append(h("div", { class: "hub-note", text: t("Counted on this computer, never sent anywhere.") }));
   }
   draw();

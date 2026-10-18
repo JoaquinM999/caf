@@ -430,20 +430,26 @@ def spotify_reproducir(consulta: str) -> str:
 
 def spotify_pausar() -> str:
     """Pausa o reanuda la reproducción en Spotify."""
-    _enviar_tecla_media(0xB3)  # VK_MEDIA_PLAY_PAUSE
-    return "Éxito: comando de pausa/reanudación enviado."
+    res = ask_island("spotify_control", {"action": "playPause"})
+    if "error" in res.lower():
+        _enviar_tecla_media(0xB3)  # VK_MEDIA_PLAY_PAUSE fallback
+    return "Éxito: comando de pausa/reanudación enviado a Spotify."
 
 
 def spotify_siguiente() -> str:
     """Pasa a la siguiente canción en Spotify."""
-    _enviar_tecla_media(0xB0)  # VK_MEDIA_NEXT_TRACK
-    return "Éxito: siguiente canción."
+    res = ask_island("spotify_control", {"action": "next"})
+    if "error" in res.lower():
+        _enviar_tecla_media(0xB0)  # VK_MEDIA_NEXT_TRACK fallback
+    return "Éxito: pasando a la siguiente canción en Spotify."
 
 
 def spotify_anterior() -> str:
     """Vuelve a la canción anterior en Spotify."""
-    _enviar_tecla_media(0xB1)  # VK_MEDIA_PREV_TRACK
-    return "Éxito: canción anterior."
+    res = ask_island("spotify_control", {"action": "previous"})
+    if "error" in res.lower():
+        _enviar_tecla_media(0xB1)  # VK_MEDIA_PREV_TRACK fallback
+    return "Éxito: volviendo a la canción anterior en Spotify."
 
 
 def buscar_web(consulta: str) -> str:
@@ -576,3 +582,60 @@ def borrar_archivo(ruta_relativa: str, confirmacion: str = "no") -> str:
         return f"Error: Archivo '{ruta_relativa}' no encontrado."
     except Exception as e:
         return f"Error al borrar: {str(e)}"
+
+
+# ── Integración con la Isla de Coucou (Island RPC) ───────────────────────────
+
+_ISLAND_ASK_HANDLER = None
+
+def set_island_ask_handler(fn):
+    global _ISLAND_ASK_HANDLER
+    _ISLAND_ASK_HANDLER = fn
+
+def ask_island(kind: str, input_data: dict | None = None) -> str:
+    global _ISLAND_ASK_HANDLER
+    if _ISLAND_ASK_HANDLER is not None:
+        try:
+            return _ISLAND_ASK_HANDLER(kind, input_data or {})
+        except Exception as e:
+            return f"Error consultando la Isla de Coucou: {e}"
+    return "La Isla de Coucou no está conectada por WebSocket."
+
+def coucou_pills(accion: str = "list", nombres: str = "") -> str:
+    """Agrega, quita, lista o define el pill principal en la isla superior de Coucou."""
+    action = (accion or "list").strip().lower()
+    names = [n.strip() for n in nombres.split(",") if n.strip()] if nombres else []
+    input_data = {"action": action, "names": names}
+    return ask_island("pills", input_data)
+
+def coucou_info() -> str:
+    """Lee el estado real de los servicios, agentes y uso de plan en la isla de Coucou."""
+    return ask_island("info", {})
+
+def preparar_email(destinatario: str, asunto: str, cuerpo: str) -> str:
+    """Abre la app de correo con destinatario, asunto y cuerpo redactados, listos para revisar y enviar."""
+    import urllib.parse
+    to = (destinatario or "").strip()
+    if not to or "@" not in to:
+        return "Error: la dirección de correo debe contener un @ válido. Pedíle al usuario que te la dicte."
+    subject = urllib.parse.quote(asunto or "")
+    body = urllib.parse.quote(cuerpo or "")
+    url = f"mailto:{to}?subject={subject}&body={body}"
+    try:
+        if sys.platform == "win32":
+            os.startfile(url)
+        else:
+            webbrowser.open(url)
+        return f"Éxito: abrí tu app de correo con el email para {to} redactado. Nada se envía solo: revisalo y dale enviar."
+    except Exception as e:
+        return f"Error al abrir la app de correo: {e}"
+
+def spotify_volumen(volumen: int) -> str:
+    """Ajusta el volumen de Spotify entre 0 y 100%."""
+    try:
+        vol = max(0, min(100, int(volumen)))
+        res = ask_island("spotify_volume", {"volume": vol})
+        return f"Volumen de Spotify ajustado a {vol}%."
+    except Exception as e:
+        return f"Error ajustando volumen de Spotify: {e}"
+
